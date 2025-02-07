@@ -159,6 +159,12 @@ fn setup_custom_font(ctx: &egui::Context) {
         .unwrap()
         .push("remix_icons".to_owned());
 
+    fonts
+        .families
+        .get_mut(&FontFamily::Monospace)
+        .unwrap()
+        .push("remix_icons".to_owned());
+
     ctx.set_fonts(fonts);
 }
 
@@ -1308,6 +1314,7 @@ impl SystemState {
                 for translator in self.translators.all_translators() {
                     translator.reload(self.channels.msg_sender.clone());
                 }
+                self.variable_name_info_cache.borrow_mut().clear();
             }
             Message::SuggestReloadWaveform => match self.user.config.autoreload_files {
                 Some(true) => {
