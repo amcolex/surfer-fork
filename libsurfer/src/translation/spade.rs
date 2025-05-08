@@ -726,12 +726,6 @@ fn info_from_concrete(ty: &ConcreteType) -> Result<VariableInfo> {
 
 fn descriptive_loc(expr: &Loc<Expression>) -> Option<Loc<()>> {
     match &expr.inner.kind {
-        spade_hir::ExprKind::Identifier(_) => None,
-        spade_hir::ExprKind::IntLiteral(_, _) => None,
-        spade_hir::ExprKind::BoolLiteral(_) => None,
-        spade_hir::ExprKind::BitLiteral(_) => None,
-        spade_hir::ExprKind::TypeLevelInteger(_) => None,
-        spade_hir::ExprKind::CreatePorts => None,
         spade_hir::ExprKind::FieldAccess(_, field) => Some(field.loc()),
         spade_hir::ExprKind::MethodCall {
             name, call_kind, ..
@@ -747,6 +741,13 @@ fn descriptive_loc(expr: &Loc<Expression>) -> Option<Loc<()>> {
         }),
         spade_hir::ExprKind::BinaryOperator(_, op, _) => Some(op.loc()),
         spade_hir::ExprKind::TupleLiteral(_)
+        | spade_hir::ExprKind::Identifier(_)
+        | spade_hir::ExprKind::IntLiteral(_, _)
+        | spade_hir::ExprKind::BoolLiteral(_)
+        | spade_hir::ExprKind::BitLiteral(_)
+        | spade_hir::ExprKind::TypeLevelInteger(_)
+        | spade_hir::ExprKind::CreatePorts
+        | spade_hir::ExprKind::LambdaDef { .. }
         | spade_hir::ExprKind::ArrayLiteral(_)
         | spade_hir::ExprKind::ArrayShorthandLiteral(_, _)
         | spade_hir::ExprKind::Index(_, _)
@@ -760,6 +761,7 @@ fn descriptive_loc(expr: &Loc<Expression>) -> Option<Loc<()>> {
         | spade_hir::ExprKind::PipelineRef { .. }
         | spade_hir::ExprKind::StageValid
         | spade_hir::ExprKind::StageReady
+        | spade_hir::ExprKind::StaticUnreachable(_)
         | spade_hir::ExprKind::Null => Some(expr.loc()),
     }
 }
