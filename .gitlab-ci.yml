@@ -91,6 +91,7 @@ test-windows:
     tags:
         - saas-windows-medium-amd64
     stage: test
+    cache: []
     script:
         - Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -OutFile .\rustup-init.exe -UseBasicParsing
         - ICACLS ".\rustup-init.exe" /grant:r "users:(RX)" /C
