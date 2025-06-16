@@ -453,6 +453,7 @@ fn format(
             value: sval.clone(),
             kind,
         }),
+        ValueRepr::Tuple | ValueRepr::Struct if subresults.len() == 1 => subresults[0].this.clone(),
         ValueRepr::Tuple => Some(TranslatedValue {
             value: format!(
                 "({})",
