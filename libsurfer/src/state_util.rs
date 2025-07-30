@@ -9,6 +9,7 @@ use crate::{
     config::{ArrowKeyBindings, AutoLoad, PrimaryMouseDrag},
     displayed_item::DisplayedItem,
     hierarchy::{HierarchyStyle, ParameterDisplayLocation},
+    time::TimeUnit,
 };
 
 impl SystemState {
@@ -195,5 +196,12 @@ impl SystemState {
         self.user
             .use_dinotrace_style
             .unwrap_or_else(|| self.user.config.layout.use_dinotrace_style())
+    }
+
+    #[inline]
+    pub fn wanted_time_unit(&self) -> TimeUnit {
+        self.user
+            .wanted_timeunit
+            .unwrap_or_else(|| self.user.config.preferred_time_unit())
     }
 }
