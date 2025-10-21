@@ -12,6 +12,7 @@ use crate::{
     dialog::{OpenSiblingStateFileDialog, ReloadWaveformDialog},
     displayed_item_tree::{DisplayedItemTree, VisibleItemIndex},
     hierarchy::{HierarchyStyle, ParameterDisplayLocation},
+    keyboard_shortcuts::SurferShortcuts,
     message::Message,
     system_state::SystemState,
     time::{TimeStringFormatting, TimeUnit},
@@ -37,6 +38,8 @@ use tracing::{error, info, trace, warn};
 pub struct UserState {
     #[serde(skip)]
     pub config: SurferConfig,
+    #[serde(skip)]
+    pub shortcuts: SurferShortcuts,
 
     /// Overrides for the config show_* fields. Defaults to `config.show_*` if not present
     pub(crate) show_hierarchy: Option<bool>,
