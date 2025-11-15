@@ -18,7 +18,7 @@ bincode.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
 camino.workspace = true
-chrono = { version = "0.4.31", default-features = false }
+chrono = { workspace = true, default-features =  false }
 eyre.workspace = true
 config.workspace = true
 derive_more.workspace = true
