@@ -18,6 +18,7 @@ mod enum_translator;
 mod event_translator;
 mod fixed_point;
 mod instruction_translators;
+mod mnemonic_translators;
 pub mod numeric_translators;
 #[cfg(feature = "python")]
 mod python_translators;
@@ -46,7 +47,11 @@ use crate::{message::Message, wave_container::VariableMeta};
 pub type DynTranslator = dyn Translator<VarId, ScopeId, Message>;
 pub type DynBasicTranslator = dyn BasicTranslator<VarId, ScopeId>;
 
+#[cfg(not(target_arch = "wasm32"))]
 static DECODERS_DIR: &str = "decoders";
+
+#[cfg(not(target_arch = "wasm32"))]
+static MNEMONIC_DIR: &str = "mnemonic";
 
 fn translate_with_basic(
     t: &DynBasicTranslator,
@@ -180,6 +185,20 @@ fn find_user_decoders() -> Vec<Arc<DynBasicTranslator>> {
     decoders
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn find_user_mnemonic_translators() -> Vec<Arc<DynBasicTranslator>> {
+    let mut translators: Vec<Arc<DynBasicTranslator>> = vec![];
+    if let Some(proj_dirs) = &*crate::config::PROJECT_DIR {
+        let mut config_decoders = find_user_mnemonic_translators_at_path(proj_dirs.config_dir());
+        translators.append(&mut config_decoders);
+    }
+
+    let mut project_decoders = find_user_mnemonic_translators_at_path(Path::new(".surfer"));
+    translators.append(&mut project_decoders);
+
+    translators
+}
+
 /// Look for user defined decoders in path.
 #[cfg(not(target_arch = "wasm32"))]
 fn find_user_decoders_at_path(path: &Path) -> Vec<Arc<DynBasicTranslator>> {
@@ -188,7 +207,7 @@ fn find_user_decoders_at_path(path: &Path) -> Vec<Arc<DynBasicTranslator>> {
     let mut decoders: Vec<Arc<DynBasicTranslator>> = vec![];
     let p = path.join(DECODERS_DIR);
     info!("Looking for user decoders at {}", p.display());
-    let Ok(decoder_dirs) = std::fs::read_dir(path.join(DECODERS_DIR)) else {
+    let Ok(decoder_dirs) = std::fs::read_dir(p) else {
         return decoders;
     };
 
@@ -279,6 +298,53 @@ fn find_user_decoders_at_path(path: &Path) -> Vec<Arc<DynBasicTranslator>> {
 }
 
 #[must_use]
+/// Look for user defined mnemonic translators in path.
+#[cfg(not(target_arch = "wasm32"))]
+fn find_user_mnemonic_translators_at_path(path: &Path) -> Vec<Arc<DynBasicTranslator>> {
+    let mut mnemonic_translators: Vec<Arc<DynBasicTranslator>> = vec![];
+    let p = path.join(MNEMONIC_DIR);
+    tracing::info!("Looking for user mnemonic translators at {:?}", p);
+    let Ok(mnemonic_files) = std::fs::read_dir(p) else {
+        return mnemonic_translators;
+    };
+
+    use crate::translation::mnemonic_translators::MnemonicTranslator;
+    for mnemonic_file in mnemonic_files.flatten() {
+        tracing::info!(
+            "Found user mnemonic translator file: {:?}",
+            mnemonic_file.path()
+        );
+        let Ok(utf8_path) = camino::Utf8PathBuf::try_from(mnemonic_file.path()) else {
+            warn!(
+                "Cannot load mnemonic translator. Path is not valid UTF-8: {:?}",
+                mnemonic_file.path()
+            );
+            continue;
+        };
+        let translator = MnemonicTranslator::new_from_file(utf8_path);
+        match translator {
+            Err(e) => {
+                warn!(
+                    "Cannot load mnemonic translator from file {:?}: {}",
+                    mnemonic_file.path(),
+                    e
+                );
+                continue;
+            }
+            Ok(translator) => {
+                tracing::info!(
+                    "Loaded {:?}-bit(s) mnemonic translator: {}",
+                    &translator.map.bits,
+                    translator.name(),
+                );
+                mnemonic_translators.push(Arc::new(translator));
+            }
+        };
+    }
+    mnemonic_translators
+}
+
+#[must_use]
 pub fn all_translators() -> TranslatorList {
     // WASM does not need mut, non-wasm does so we'll allow it
     #[allow(unused_mut)]
@@ -322,6 +388,9 @@ pub fn all_translators() -> TranslatorList {
 
     #[cfg(not(target_arch = "wasm32"))]
     basic_translators.append(&mut find_user_decoders());
+
+    #[cfg(not(target_arch = "wasm32"))]
+    basic_translators.append(&mut find_user_mnemonic_translators());
 
     TranslatorList::new(
         basic_translators,
