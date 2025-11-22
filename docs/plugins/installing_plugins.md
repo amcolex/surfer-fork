@@ -1,11 +1,11 @@
 # Installing Translator Plugins
 
-Plugins come as a single `.wasm` file which surfer will search for in `.surfer/translators` the current working directory, as well as in the global configuration directory
+Plugins come as a single `.wasm` file which Surfer will search for in `.surfer/translators` the current working directory, as well as in the global, OS-dependent, configuration directory
 
 | Os      | Path                                                                  |
 |---------|-----------------------------------------------------------------------|
-| Linux   | `~/.config/surfer/translators/`                                        |
-| Windows | `C:\Users\<Name>\AppData\Roaming\surfer-project\surfer\config\translators\`  |
+| Linux   | `~/.local/share/surfer/translators`                                        |
+| Windows | `C:\Users\<Name>\AppData\Roaming\surfer-project\surfer\data\translators\`  |
 | macOS   | `/Users/<Name>/Library/Application Support/org.surfer-project.surfer/translators/` |
 
 To install a translator, simply put the `.wasm` file in one of these locations,
