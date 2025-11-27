@@ -17,6 +17,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant, SystemTime};
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 use tracing::{error, info, warn};
 use wellen::{
     viewers, CompressedSignal, CompressedTimeTable, FileFormat, Hierarchy, Signal, SignalRef, Time,
@@ -28,7 +29,6 @@ use crate::{
 };
 
 // Constants
-const POLL_INTERVAL_MS: u64 = 100;
 const ERROR_RELOAD_TOO_FREQUENT: &[u8] = b"{\"error\":\"Reload too frequent\"}";
 const ERROR_FILE_NOT_FOUND: &[u8] = b"{\"error\":\"File not found\"}";
 const INFO_FILE_UNCHANGED: &[u8] = b"{\"info\":\"File unchanged\"}";
@@ -54,6 +54,7 @@ struct State {
     last_reload_time: Option<Instant>,
     last_reload_request: Option<Instant>,
     last_file_mtime: Option<SystemTime>,
+    notify: Arc<Notify>,
 }
 
 impl State {
@@ -200,12 +201,16 @@ async fn get_signals(
     // send request to background thread
     tx.send(LoaderMessage::SignalRequest(ids.clone()))?;
 
-    // poll to see when all our ids are returned
+    let notify = {
+        let state = state.read().expect("State lock poisoned in get_signals");
+        state.notify.clone()
+    };
+
+    // Wait for all signals to be loaded
     let mut data = vec![];
     leb128::write::unsigned(&mut data, num_ids as u64)?;
     let mut raw_size = 0;
     loop {
-        tokio::time::sleep(tokio::time::Duration::from_millis(POLL_INTERVAL_MS)).await;
         {
             let state = state.read().expect("State lock poisoned in get_signals");
             if ids.iter().all(|id| state.signals.contains_key(id)) {
@@ -218,6 +223,8 @@ async fn get_signals(
                 break;
             }
         };
+        // Wait for notification that signals have been loaded
+        notify.notified().await;
     }
     info!(
         "Sending {} signals. {} raw, {} compressed.",
@@ -554,6 +561,7 @@ fn loader(
             state.last_reload_time = Some(Instant::now());
             state.reloading = false;
             state.last_reload_ok = true;
+            state.notify.notify_waiters();
         }
         // source is private, only owned by us
         let mut source = body_result.source;
@@ -593,6 +601,7 @@ fn loader(
                         for (id, signal) in result {
                             state.signals.insert(id, signal);
                         }
+                        state.notify.notify_waiters();
                     }
                 }
                 LoaderMessage::Reload => {
