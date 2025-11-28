@@ -57,6 +57,7 @@ softposit.workspace = true
 surfer-translation-types = { path = "../surfer-translation-types", default-features = false }
 surver.workspace = true
 sys-locale.workspace = true
+thiserror.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
