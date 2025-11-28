@@ -6,13 +6,14 @@ use eyre::WrapErr;
 use ftr_parser::types::{Transaction, TxGenerator};
 use itertools::Itertools;
 use num::bigint::{ToBigInt, ToBigUint};
-use num::{BigInt, BigUint, ToPrimitive};
+use num::{BigInt, BigUint, ToPrimitive, Zero};
 use rayon::prelude::{IntoParallelRefIterator, ParallelBridge, ParallelIterator};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use surfer_translation_types::{
     SubFieldFlatTranslationResult, TranslatedValue, ValueKind, VariableInfo, VariableType,
+    VariableValue,
 };
 use tracing::{error, warn};
 
@@ -35,12 +36,43 @@ use crate::{
     Message, SystemState,
 };
 
+/// Information about values to mimic dinotrace's special drawing of all-0 and all-1 values
+#[derive(Clone, Copy)]
+enum DinoInfo {
+    AllOnes,
+    AllZeros,
+    Normal,
+}
+
+impl DinoInfo {
+    pub fn from_value(val: &VariableValue, num_bits: Option<u32>) -> Self {
+        match val {
+            VariableValue::BigUint(u) => {
+                if u.is_zero() {
+                    DinoInfo::AllZeros
+                } else {
+                    if let Some(bits) = num_bits {
+                        if bits > 1 && u.count_ones() == bits as u64 {
+                            DinoInfo::AllOnes
+                        } else {
+                            DinoInfo::Normal
+                        }
+                    } else {
+                        DinoInfo::Normal
+                    }
+                }
+            }
+            _ => DinoInfo::Normal,
+        }
+    }
+}
 pub struct DrawnRegion {
     inner: Option<TranslatedValue>,
     /// True if a transition should be drawn even if there is no change in the value
     /// between the previous and next pixels. Only used by the bool drawing logic to
     /// draw draw a vertical line and prevent apparent aliasing
     force_anti_alias: bool,
+    dino_info: DinoInfo,
 }
 
 /// List of values to draw for a variable. It is an ordered list of values that should
@@ -203,6 +235,8 @@ fn variable_draw_commands(
             translators,
         );
 
+        let dino_info = DinoInfo::from_value(&val, meta.num_bits);
+
         for SubFieldFlatTranslationResult { names, value } in fields {
             let entry = local_commands.entry(names.clone()).or_insert_with(|| {
                 match info.get_subinfo(&names) {
@@ -248,6 +282,7 @@ fn variable_draw_commands(
                     DrawnRegion {
                         inner: value,
                         force_anti_alias: anti_alias && !new_value,
+                        dino_info,
                     },
                 ));
             }
@@ -1170,37 +1205,85 @@ impl SystemState {
     ) {
         if let Some(prev_result) = &prev_region.inner {
             let color = prev_result.kind.color(user_color, ctx.theme);
-            let stroke = Stroke {
-                color,
-                width: self.user.config.theme.linewidth,
-            };
-
             let transition_width = (new_x - old_x).min(ctx.theme.vector_transition_width);
 
             let trace_coords =
                 |x, y| (ctx.to_screen)(x, y * ctx.cfg.line_height * height_scaling_factor + offset);
 
-            let points = vec![
-                trace_coords(*old_x, 0.5),
-                trace_coords(old_x + transition_width / 2., 0.0),
-                trace_coords(new_x - transition_width / 2., 0.0),
-                trace_coords(*new_x, 0.5),
-                trace_coords(new_x - transition_width / 2., 1.0),
-                trace_coords(old_x + transition_width / 2., 1.0),
-                trace_coords(*old_x, 0.5),
-            ];
+            match prev_region.dino_info {
+                DinoInfo::Normal => {
+                    let points = vec![
+                        trace_coords(*old_x, 0.5),
+                        trace_coords(old_x + transition_width / 2., 0.0),
+                        trace_coords(new_x - transition_width / 2., 0.0),
+                        trace_coords(*new_x, 0.5),
+                        trace_coords(new_x - transition_width / 2., 1.0),
+                        trace_coords(old_x + transition_width / 2., 1.0),
+                        trace_coords(*old_x, 0.5),
+                    ];
+                    let stroke = Stroke {
+                        color,
+                        width: self.user.config.theme.linewidth,
+                    };
+                    if self.user.config.theme.wide_opacity != 0.0 {
+                        // For performance, it might be nice to draw both the background and line with this
+                        // call, but using convex_polygon on our polygons create artefacts on thin transitions.
+                        ctx.painter.add(PathShape::convex_polygon(
+                            points.clone(),
+                            color.gamma_multiply(self.user.config.theme.wide_opacity),
+                            PathStroke::NONE,
+                        ));
+                    }
 
-            if self.user.config.theme.wide_opacity != 0.0 {
-                // For performance, it might be nice to draw both the background and line with this
-                // call, but using convex_polygon on our polygons create artefacts on thin transitions.
-                ctx.painter.add(PathShape::convex_polygon(
-                    points.clone(),
-                    color.gamma_multiply(self.user.config.theme.wide_opacity),
-                    PathStroke::NONE,
-                ));
-            }
+                    ctx.painter.add(PathShape::line(points, stroke));
+                }
+                DinoInfo::AllOnes => {
+                    let points = vec![
+                        trace_coords(*old_x, 0.5),
+                        trace_coords(old_x + transition_width / 2., 0.0),
+                        trace_coords(new_x - transition_width / 2., 0.0),
+                        trace_coords(*new_x, 0.5),
+                        trace_coords(new_x - transition_width / 2., 1.0),
+                        trace_coords(old_x + transition_width / 2., 1.0),
+                        trace_coords(*old_x, 0.5),
+                    ];
+                    let stroke_fat = Stroke {
+                        color,
+                        width: 2.0 * self.user.config.theme.linewidth,
+                    };
+                    let stroke = Stroke {
+                        color,
+                        width: self.user.config.theme.linewidth,
+                    };
+                    if self.user.config.theme.wide_opacity != 0.0 {
+                        // For performance, it might be nice to draw both the background and line with this
+                        // call, but using convex_polygon on our polygons create artefacts on thin transitions.
+                        ctx.painter.add(PathShape::convex_polygon(
+                            points.clone(),
+                            color.gamma_multiply(self.user.config.theme.wide_opacity),
+                            PathStroke::NONE,
+                        ));
+                    }
 
-            ctx.painter.add(PathShape::line(points, stroke));
+                    ctx.painter
+                        .add(PathShape::line(points[0..4].to_vec(), stroke_fat));
+                    ctx.painter
+                        .add(PathShape::line(points[3..7].to_vec(), stroke));
+                }
+                DinoInfo::AllZeros => {
+                    let points = vec![
+                        trace_coords(*old_x, 0.5),
+                        trace_coords(old_x + transition_width / 2., 1.0),
+                        trace_coords(new_x - transition_width / 2., 1.0),
+                        trace_coords(*new_x, 0.5),
+                    ];
+                    let stroke = Stroke {
+                        color,
+                        width: 2.0 * self.user.config.theme.linewidth,
+                    };
+                    ctx.painter.add(PathShape::line(points, stroke));
+                }
+            };
 
             let text_size = ctx.cfg.text_size;
             let char_width = text_size * (20. / 31.);
