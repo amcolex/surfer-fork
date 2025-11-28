@@ -538,14 +538,22 @@ impl SystemState {
         let start = web_time::Instant::now();
         let task = async move {
             sleep_ms(delay_ms).await;
-            let res = crate::remote::reload(server.clone())
-                .await
-                .map_err(|e| anyhow!("{e:?}"))
-                .with_context(|| format!("Failed to request reload from remote server {server}"));
+            let res = crate::remote::reload(server.clone()).await;
 
             let msg = match res {
                 Ok(status) => Message::SurferServerStatus(start, server, status),
-                Err(e) => Message::Error(e),
+                Err(crate::remote::ReloadError::TooFrequent) => {
+                    info!("Reload request was rate-limited by server");
+                    return; // Don't send error message for expected rate limiting
+                }
+                Err(crate::remote::ReloadError::FileUnchanged) => {
+                    info!("File unchanged, no reload needed");
+                    return; // Don't send error message for unchanged file
+                }
+                Err(e) => {
+                    let err = anyhow!("{e:?}");
+                    Message::Error(err)
+                }
             };
             if let Err(e) = sender.send(msg) {
                 error!("Failed to send message: {e}");

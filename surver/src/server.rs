@@ -318,13 +318,12 @@ async fn handle_cmd(
                         .body(Full::from(ERROR_FILE_NOT_FOUND.to_vec()))?);
                 }
             };
-            let file_size = meta.len();
             let mtime = meta
                 .modified()
                 .unwrap_or_else(|_| std::time::SystemTime::UNIX_EPOCH);
-            let unchanged = Some(file_size) == Some(shared.body_len + shared.header_len)
-                && state_guard.last_file_mtime == Some(mtime)
-                && state_guard.last_reload_ok;
+            // Should probably look at file lengths as well for extra safety, but they are not updated correctly at the moment
+            let unchanged =
+                state_guard.last_file_mtime == Some(mtime) && state_guard.last_reload_ok;
             if unchanged {
                 drop(state_guard);
                 return Ok(Response::builder()
