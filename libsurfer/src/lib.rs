@@ -1361,6 +1361,10 @@ impl SystemState {
                 self.user.clock_highlight_type = Some(new_type);
             }
             Message::SetFillHighValues(fill) => self.user.fill_high_values = Some(fill),
+            Message::SetDinotraceStyle(dino_style) => {
+                self.user.dino_style = Some(dino_style);
+                self.invalidate_draw_commands();
+            }
             Message::AddMarker {
                 time,
                 name,

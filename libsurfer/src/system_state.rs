@@ -172,6 +172,7 @@ impl SystemState {
                 autoload_sibling_state_files: None,
                 autoreload_files: None,
                 animation_enabled: None,
+                dino_style: None,
             },
             translators,
             channels,

@@ -189,4 +189,11 @@ impl SystemState {
             .parameter_display_location
             .unwrap_or_else(|| self.user.config.layout.parameter_display_location())
     }
+
+    #[inline]
+    pub fn dino_style(&self) -> bool {
+        self.user
+            .dino_style
+            .unwrap_or_else(|| self.user.config.layout.dino_style())
+    }
 }
