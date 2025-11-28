@@ -6,13 +6,14 @@ use eyre::WrapErr;
 use ftr_parser::types::{Transaction, TxGenerator};
 use itertools::Itertools;
 use num::bigint::{ToBigInt, ToBigUint};
-use num::{BigInt, BigUint, ToPrimitive};
+use num::{BigInt, BigUint, ToPrimitive, Zero};
 use rayon::prelude::{IntoParallelRefIterator, ParallelBridge, ParallelIterator};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use surfer_translation_types::{
     SubFieldFlatTranslationResult, TranslatedValue, ValueKind, VariableInfo, VariableType,
+    VariableValue,
 };
 use tracing::{error, warn};
 
@@ -35,12 +36,41 @@ use crate::{
     Message, SystemState,
 };
 
+/// Information about values to mimic dinotrace's special drawing of all-0 and all-1 values
+#[derive(Clone, Copy)]
+enum DinotraceDrawingStyle {
+    Normal,
+    AllZeros,
+    AllOnes,
+}
+
+impl DinotraceDrawingStyle {
+    fn from_value(val: &VariableValue, num_bits: Option<u32>) -> Self {
+        match val {
+            VariableValue::BigUint(u) => {
+                if u.is_zero() {
+                    DinotraceDrawingStyle::AllZeros
+                } else if let Some(bits) = num_bits {
+                    if u.count_ones() == bits as u64 {
+                        DinotraceDrawingStyle::AllOnes
+                    } else {
+                        DinotraceDrawingStyle::Normal
+                    }
+                } else {
+                    DinotraceDrawingStyle::Normal
+                }
+            }
+            _ => DinotraceDrawingStyle::Normal,
+        }
+    }
+}
 pub struct DrawnRegion {
     inner: Option<TranslatedValue>,
     /// True if a transition should be drawn even if there is no change in the value
     /// between the previous and next pixels. Only used by the bool drawing logic to
     /// draw draw a vertical line and prevent apparent aliasing
     force_anti_alias: bool,
+    dinotrace_style: DinotraceDrawingStyle,
 }
 
 /// List of values to draw for a variable. It is an ordered list of values that should
@@ -94,6 +124,7 @@ struct VariableDrawCommands {
     local_msgs: Vec<Message>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn variable_draw_commands(
     displayed_variable: &DisplayedVariable,
     display_id: DisplayedItemRef,
@@ -102,6 +133,7 @@ fn variable_draw_commands(
     translators: &TranslatorList,
     view_width: f32,
     viewport_idx: usize,
+    use_dinotrace_style: bool,
 ) -> Option<VariableDrawCommands> {
     let mut clock_edges = vec![];
     let mut local_msgs = vec![];
@@ -203,6 +235,12 @@ fn variable_draw_commands(
             translators,
         );
 
+        let dinotrace_style = if use_dinotrace_style {
+            DinotraceDrawingStyle::from_value(&val, meta.num_bits)
+        } else {
+            DinotraceDrawingStyle::Normal
+        };
+
         for SubFieldFlatTranslationResult { names, value } in fields {
             let entry = local_commands.entry(names.clone()).or_insert_with(|| {
                 match info.get_subinfo(&names) {
@@ -248,6 +286,7 @@ fn variable_draw_commands(
                     DrawnRegion {
                         inner: value,
                         force_anti_alias: anti_alias && !new_value,
+                        dinotrace_style,
                     },
                 ));
             }
@@ -329,6 +368,7 @@ impl SystemState {
             .collect::<Vec<_>>();
         timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
+        let use_dinotrace_style = self.use_dinotrace_style();
         let translators = &self.translators;
         let commands = waves
             .items_tree
@@ -352,6 +392,7 @@ impl SystemState {
                     translators,
                     frame_width,
                     viewport_idx,
+                    use_dinotrace_style,
                 )
             })
             .collect::<Vec<_>>();
@@ -1170,11 +1211,6 @@ impl SystemState {
     ) {
         if let Some(prev_result) = &prev_region.inner {
             let color = prev_result.kind.color(user_color, ctx.theme);
-            let stroke = Stroke {
-                color,
-                width: self.user.config.theme.linewidth,
-            };
-
             let transition_width = (new_x - old_x).min(ctx.theme.vector_transition_width);
 
             let trace_coords =
@@ -1189,7 +1225,6 @@ impl SystemState {
                 trace_coords(old_x + transition_width / 2., 1.0),
                 trace_coords(*old_x, 0.5),
             ];
-
             if self.user.config.theme.wide_opacity != 0.0 {
                 // For performance, it might be nice to draw both the background and line with this
                 // call, but using convex_polygon on our polygons create artefacts on thin transitions.
@@ -1199,8 +1234,38 @@ impl SystemState {
                     PathStroke::NONE,
                 ));
             }
+            match prev_region.dinotrace_style {
+                DinotraceDrawingStyle::Normal => {
+                    let stroke = Stroke {
+                        color,
+                        width: self.user.config.theme.linewidth,
+                    };
 
-            ctx.painter.add(PathShape::line(points, stroke));
+                    ctx.painter.add(PathShape::line(points, stroke));
+                }
+                DinotraceDrawingStyle::AllOnes => {
+                    let stroke_thick = Stroke {
+                        color,
+                        width: self.user.config.theme.thick_linewidth,
+                    };
+                    let stroke = Stroke {
+                        color,
+                        width: self.user.config.theme.linewidth,
+                    };
+                    ctx.painter
+                        .add(PathShape::line(points[0..4].to_vec(), stroke_thick));
+                    ctx.painter
+                        .add(PathShape::line(points[3..7].to_vec(), stroke));
+                }
+                DinotraceDrawingStyle::AllZeros => {
+                    let stroke_thick = Stroke {
+                        color,
+                        width: self.user.config.theme.thick_linewidth,
+                    };
+                    ctx.painter
+                        .add(PathShape::line(points[3..7].to_vec(), stroke_thick));
+                }
+            };
 
             let text_size = ctx.cfg.text_size;
             let char_width = text_size * (20. / 31.);
