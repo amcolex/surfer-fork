@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use wellen::CompressedTimeTable;
 
 use surver::{
-    Status, BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION,
+    SurverStatus, BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION,
     WELLEN_VERSION, X_SURFER_VERSION, X_WELLEN_VERSION,
 };
 
@@ -66,16 +66,16 @@ fn check_response(server_url: &str, response: &reqwest::Response) -> Result<()> 
     Ok(())
 }
 
-async fn get_status(server: String) -> Result<Status> {
+async fn get_status(server: String) -> Result<SurverStatus> {
     let client = reqwest::Client::new();
     let response = client.get(format!("{server}/get_status")).send().await?;
     check_response(&server, &response)?;
     let body = response.text().await?;
-    let status = serde_json::from_str::<Status>(&body)?;
+    let status = serde_json::from_str::<SurverStatus>(&body)?;
     Ok(status)
 }
 
-async fn reload(server: String) -> std::result::Result<Status, ReloadError> {
+async fn reload(server: String) -> std::result::Result<SurverStatus, ReloadError> {
     let client = reqwest::Client::new();
     let response = client.get(format!("{server}/reload")).send().await?;
     check_response(&server, &response)?;
@@ -92,7 +92,7 @@ async fn reload(server: String) -> std::result::Result<Status, ReloadError> {
         }
         StatusCode::ACCEPTED => {
             info!("File reloaded at server");
-            let status = serde_json::from_str::<Status>(&body)?;
+            let status = serde_json::from_str::<SurverStatus>(&body)?;
             Ok(status)
         }
         code => {

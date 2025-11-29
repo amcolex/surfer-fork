@@ -26,7 +26,9 @@ use crate::wellen::{
     BodyResult, HeaderResult, LoadSignalPayload, LoadSignalsCmd, LoadSignalsResult,
 };
 use crate::{message::Message, SystemState};
-use surver::{Status, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, WELLEN_SURFER_DEFAULT_OPTIONS};
+use surver::{
+    SurverStatus, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, WELLEN_SURFER_DEFAULT_OPTIONS,
+};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub enum CxxrtlKind {
@@ -457,7 +459,7 @@ impl SystemState {
     }
 
     /// uses the server status in order to display a loading bar
-    pub fn server_status_to_progress(&mut self, server: String, status: Status) {
+    pub fn server_status_to_progress(&mut self, server: String, status: SurverStatus) {
         // once the body is loaded, we are no longer interested in the status
         let body_loaded = self
             .user
