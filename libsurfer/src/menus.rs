@@ -398,6 +398,11 @@ impl SystemState {
                 .then(|| {
                     msgs.push(Message::EnableAnimations(!self.animation_enabled()));
                 });
+            ui.radio(self.dino_style(), "DinoTrace drawing style")
+                .clicked()
+                .then(|| {
+                    msgs.push(Message::SetDinotraceStyle(!self.dino_style()));
+                });
         });
         ui.menu_button("Help", |ui| {
             b("Quick start", Message::SetQuickStartVisible(true)).add_closing_menu(msgs, ui);
