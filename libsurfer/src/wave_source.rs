@@ -26,7 +26,9 @@ use crate::wellen::{
     BodyResult, HeaderResult, LoadSignalPayload, LoadSignalsCmd, LoadSignalsResult,
 };
 use crate::{SystemState, message::Message};
-use surver::{HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, Status, WELLEN_SURFER_DEFAULT_OPTIONS};
+use surver::{
+    HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SurverStatus, WELLEN_SURFER_DEFAULT_OPTIONS,
+};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub enum CxxrtlKind {
@@ -364,22 +366,22 @@ impl SystemState {
 
                     // check to see if the response came from a Surfer running in server mode
 
-                    if let Some(value) = response.headers().get(HTTP_SERVER_KEY) &&
-                        matches!(value.to_str(), Ok(HTTP_SERVER_VALUE_SURFER)) {
-                            if load_options.keep_variables {
-                                // Request a reload (will also get status)
-                                info!("Reloading from surfer server at: {url}");
-                                server_reload(sender.clone(), url.clone(), 0);
-                            } else {
-                                info!("Connecting to a surfer server at: {url}");
-                                // Request status
-                                get_server_status(sender.clone(), url.clone(), 0);
-                            }
-                            // Request hierarchy
-                            get_hierarchy_from_server(sender.clone(), url.clone(), load_options);
-                            return;
+                    if let Some(value) = response.headers().get(HTTP_SERVER_KEY)
+                        && matches!(value.to_str(), Ok(HTTP_SERVER_VALUE_SURFER))
+                    {
+                        if load_options.keep_variables {
+                            // Request a reload (will also get status)
+                            info!("Reloading from surfer server at: {url}");
+                            server_reload(sender.clone(), url.clone(), 0);
+                        } else {
+                            info!("Connecting to a surfer server at: {url}");
+                            // Request status
+                            get_server_status(sender.clone(), url.clone(), 0);
                         }
-
+                        // Request hierarchy
+                        get_hierarchy_from_server(sender.clone(), url.clone(), load_options);
+                        return;
+                    }
 
                     // otherwise we load the body to get at the file
                     let bytes = response
@@ -458,7 +460,7 @@ impl SystemState {
     }
 
     /// uses the server status in order to display a loading bar
-    pub fn server_status_to_progress(&mut self, server: String, status: Status) {
+    pub fn server_status_to_progress(&mut self, server: String, status: SurverStatus) {
         // once the body is loaded, we are no longer interested in the status
         let body_loaded = self
             .user

@@ -1,25 +1,26 @@
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::OnceLock;
+use std::sync::mpsc::Sender;
 
 use bincode::Options;
-use eyre::{anyhow, Context, Result};
+use eyre::{Context, Result, anyhow};
 use eyre::{bail, eyre};
 use reqwest::StatusCode;
 use thiserror::Error;
 use tracing::{error, info, warn};
 use wellen::CompressedTimeTable;
+
+use surver::{
+    BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION, SurverStatus,
+    WELLEN_VERSION, X_SURFER_VERSION, X_WELLEN_VERSION,
+};
+
 use super::HierarchyResponse;
 use crate::async_util::sleep_ms;
 use crate::message::Message;
 use crate::spawn;
 use crate::wave_source::{LoadOptions, WaveSource};
 use crate::wellen::{BodyResult, HeaderResult};
-
-use surver::{
-    BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION, Status,
-    WELLEN_VERSION, X_SURFER_VERSION, X_WELLEN_VERSION,
-};
 
 /// Returns a shared reqwest client to reuse HTTP connections and reduce TLS overhead.
 fn get_client() -> &'static reqwest::Client {
@@ -76,16 +77,16 @@ fn check_response(server_url: &str, response: &reqwest::Response) -> Result<()> 
     Ok(())
 }
 
-async fn get_status(server: String) -> Result<Status> {
+async fn get_status(server: String) -> Result<SurverStatus> {
     let client = get_client();
     let response = client.get(format!("{server}/get_status")).send().await?;
     check_response(&server, &response)?;
     let body = response.text().await?;
-    let status = serde_json::from_str::<Status>(&body)?;
+    let status = serde_json::from_str::<SurverStatus>(&body)?;
     Ok(status)
 }
 
-async fn reload(server: String) -> std::result::Result<Status, ReloadError> {
+async fn reload(server: String) -> std::result::Result<SurverStatus, ReloadError> {
     let client = get_client();
     let response = client.get(format!("{server}/reload")).send().await?;
     check_response(&server, &response)?;
@@ -102,7 +103,7 @@ async fn reload(server: String) -> std::result::Result<Status, ReloadError> {
         }
         StatusCode::ACCEPTED => {
             info!("File reloaded at server");
-            let status = serde_json::from_str::<Status>(&body)?;
+            let status = serde_json::from_str::<SurverStatus>(&body)?;
             Ok(status)
         }
         code => {
