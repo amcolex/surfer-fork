@@ -1,7 +1,10 @@
 //! Code for the `surver` executable.
 use clap::Parser;
 use eyre::Result;
-use tracing_subscriber::Layer;
+use std::io::stdout;
+use tokio::runtime::Builder;
+use tracing::subscriber::set_global_default;
+use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Layer, Registry};
 
 #[derive(clap::Parser, Default)]
 #[command(version = concat!(env!("CARGO_PKG_VERSION"), " (git: ", env!("VERGEN_GIT_DESCRIBE"), ")"), about)]
@@ -17,17 +20,14 @@ struct Args {
     /// Token used by the client to authenticate to the server
     #[clap(long)]
     token: Option<String>,
+    #[clap(long)]
+    /// Seconds to guard against repeated reloads, default 1 s
+    reload_guard: Option<u64>,
 }
 
 /// Starts the logging and error handling. Can be used by unittests to get more insights.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn start_logging() -> Result<()> {
-    use std::io::stdout;
-
-    use tracing_subscriber::{fmt, layer::SubscriberExt, Registry};
-
-    let filter =
-        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     let subscriber = Registry::default().with(
         fmt::layer()
             .without_time()
@@ -35,7 +35,7 @@ pub fn start_logging() -> Result<()> {
             .with_filter(filter.clone()),
     );
 
-    tracing::subscriber::set_global_default(subscriber).expect("unable to set global subscriber");
+    set_global_default(subscriber).expect("unable to set global subscriber");
 
     Ok(())
 }
@@ -43,7 +43,7 @@ pub fn start_logging() -> Result<()> {
 fn main() -> Result<()> {
     start_logging()?;
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
+    let runtime = Builder::new_current_thread()
         .worker_threads(1)
         .enable_all()
         .build()
@@ -55,6 +55,7 @@ fn main() -> Result<()> {
     // Use CLI override if provided, otherwise use hardcoded defaults
     let bind_addr = args.bind_address.unwrap_or_else(|| "127.0.0.1".to_string());
     let port = args.port.unwrap_or(8911);
+    let reload_guard = args.reload_guard.unwrap_or(1);
 
     runtime.block_on(surver::server_main(
         port,
@@ -62,5 +63,6 @@ fn main() -> Result<()> {
         args.token,
         args.wave_file,
         None,
+        reload_guard,
     ))
 }
