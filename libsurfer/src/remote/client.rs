@@ -30,8 +30,6 @@ fn get_client() -> &'static reqwest::Client {
 
 #[derive(Debug, Error)]
 pub enum ReloadError {
-    #[error("Reload requested too frequently, please wait before trying again")]
-    TooFrequent,
     #[error("File unchanged since last reload")]
     FileUnchanged,
     #[error("Unexpected response code: {0}")]
@@ -93,10 +91,6 @@ async fn reload(server: String) -> std::result::Result<SurverStatus, ReloadError
     let status_code = response.status();
     let body = response.text().await?;
     match status_code {
-        StatusCode::TOO_MANY_REQUESTS => {
-            info!("Reload too frequent");
-            Err(ReloadError::TooFrequent)
-        }
         StatusCode::NOT_MODIFIED => {
             info!("File unchanged");
             Err(ReloadError::FileUnchanged)
@@ -325,10 +319,6 @@ pub fn server_reload(sender: Sender<Message>, server: String, delay_ms: u64) {
 
         let msg = match res {
             Ok(status) => Message::SurferServerStatus(start, server, status),
-            Err(crate::remote::ReloadError::TooFrequent) => {
-                info!("Reload request was rate-limited by server");
-                return; // Don't send error message for expected rate limiting
-            }
             Err(crate::remote::ReloadError::FileUnchanged) => {
                 info!("File unchanged, no reload needed");
                 return; // Don't send error message for unchanged file
@@ -346,11 +336,9 @@ pub fn server_reload(sender: Sender<Message>, server: String, delay_ms: u64) {
 }
 
 mod tests {
-    use crate::remote::get_signals;
-
-    use super::{format_signal_url, signal_url_len};
     #[test]
     fn test_signal_url_length_calculation() {
+        use crate::remote::client::signal_url_len;
         // Test edge cases for digit calculation
         assert_eq!(signal_url_len(0), 2); // "/0" -> 2 chars
         assert_eq!(signal_url_len(1), 2); // "/1" -> 2 chars
@@ -365,6 +353,7 @@ mod tests {
 
     #[test]
     fn test_empty_signals_returns_empty() {
+        use crate::remote::get_signals;
         // Create a mock async runtime for testing
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
@@ -379,6 +368,7 @@ mod tests {
 
     #[test]
     fn test_boundary_signal_indices() {
+        use crate::remote::client::signal_url_len;
         // Test that we handle boundary cases correctly
         let boundary_indices = vec![0, 1, 9, 10, 99, 100, 999, 1000, 9999, 10000];
 
@@ -401,6 +391,7 @@ mod tests {
 
     #[test]
     fn test_url_construction_format() {
+        use crate::remote::client::format_signal_url;
         // Verify URL format matches expected pattern
         let base_url = "http://localhost:8080/get_signals";
         let signals: Vec<wellen::SignalRef> = vec![
