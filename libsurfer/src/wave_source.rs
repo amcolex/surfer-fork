@@ -372,7 +372,7 @@ impl SystemState {
                     if let Some(value) = response.headers().get(HTTP_SERVER_KEY)
                         && matches!(value.to_str(), Ok(HTTP_SERVER_VALUE_SURFER))
                     {
-                        if load_options.keep_variables {
+                        if load_options == LoadOptions::KeepAll {
                             // Request a reload (will also get status)
                             info!("Reloading from surfer server at: {url}");
                             server_reload(sender.clone(), url.clone(), 0);
