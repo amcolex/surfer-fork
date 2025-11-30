@@ -496,11 +496,10 @@ impl SystemState {
                         break;
                     }
 
-                    if let Some(focused_tx_ref) = focused_tx_ref {
-                        if curr_tx_id == focused_tx_ref.id {
+                    if let Some(focused_tx_ref) = focused_tx_ref
+                        && curr_tx_id == focused_tx_ref.id {
                             new_focused_tx = Some(tx);
                         }
-                    }
 
                     let min_px = viewport.pixel_from_time(
                         &start_time.to_bigint().unwrap(),
@@ -673,13 +672,11 @@ impl SystemState {
         if !modifiers.command
             && ((response.dragged_by(PointerButton::Primary) && !self.do_measure(&modifiers))
                 || response.clicked_by(PointerButton::Primary))
-        {
-            if let Some(snap_point) =
+            && let Some(snap_point) =
                 self.snap_to_edge(pointer_pos_canvas, waves, frame_width, viewport_idx)
             {
                 msgs.push(Message::CursorSet(snap_point));
             }
-        }
 
         // Draw background
         painter.rect_filled(
@@ -1444,13 +1441,12 @@ impl SystemState {
         let viewport = &waves.viewports[viewport_idx];
         let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
         let timestamp = viewport.as_time_bigint(pos.x, frame_width, &num_timestamps);
-        if let Some(utimestamp) = timestamp.to_biguint() {
-            if let Some(vidx) = waves.get_item_at_y(pos.y) {
-                if let Some(node) = waves.items_tree.get_visible(vidx) {
-                    if let Some(DisplayedItem::Variable(variable)) =
+        if let Some(utimestamp) = timestamp.to_biguint()
+            && let Some(vidx) = waves.get_item_at_y(pos.y)
+                && let Some(node) = waves.items_tree.get_visible(vidx)
+                    && let Some(DisplayedItem::Variable(variable)) =
                         &waves.displayed_items.get(&node.item_ref)
-                    {
-                        if let Ok(Some(res)) = waves
+                        && let Ok(Some(res)) = waves
                             .inner
                             .as_waves()
                             .unwrap()
@@ -1477,10 +1473,6 @@ impl SystemState {
                                 return Some(next_time.clone());
                             }
                         }
-                    }
-                }
-            }
-        }
         Some(timestamp)
     }
 

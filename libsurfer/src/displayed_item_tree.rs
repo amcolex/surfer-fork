@@ -427,11 +427,10 @@ impl DisplayedItemTree {
         indices: Vec<ItemIndex>,
         target: TargetPosition,
     ) -> Result<(), MoveError> {
-        if let Some(idx) = indices.last() {
-            if idx.0 >= self.items.len() {
+        if let Some(idx) = indices.last()
+            && idx.0 >= self.items.len() {
                 return Err(MoveError::InvalidIndex);
             }
-        }
 
         // sort from back to front
         // that makes removal easier since we don't have to check whether we have to move some

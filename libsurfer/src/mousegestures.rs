@@ -370,8 +370,7 @@ impl SystemState {
             if !modifiers.command
                 && response.dragged_by(PointerButton::Primary)
                 && self.do_measure(&modifiers)
-            {
-                if let Some(current_location) = pointer_pos_canvas {
+                && let Some(current_location) = pointer_pos_canvas {
                     self.draw_zoom_in_gesture(
                         start_location,
                         current_location,
@@ -382,7 +381,6 @@ impl SystemState {
                         true,
                     );
                 }
-            }
             if response.drag_stopped_by(PointerButton::Primary) {
                 msgs.push(Message::SetMeasureDragStart(None));
             }

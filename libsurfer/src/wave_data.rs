@@ -146,8 +146,8 @@ where
         })
         .unwrap();
 
-    let translator = translators.get_translator(&translator_name);
-    translator
+    
+    (translators.get_translator(&translator_name)) as _
 }
 
 impl WaveData {
@@ -834,14 +834,13 @@ impl WaveData {
         variable: Option<VisibleItemIndex>,
         skip_zero: bool,
     ) {
-        if let Some(vidx) = variable.or(self.focused_item) {
-            if let Some(cursor) = &self.cursor {
-                if let Some(DisplayedItem::Variable(variable)) = &self
+        if let Some(vidx) = variable.or(self.focused_item)
+            && let Some(cursor) = &self.cursor
+                && let Some(DisplayedItem::Variable(variable)) = &self
                     .items_tree
                     .get_visible(vidx)
                     .and_then(|node| self.displayed_items.get(&node.item_ref))
-                {
-                    if let Ok(Some(res)) = self.inner.as_waves().unwrap().query_variable(
+                    && let Ok(Some(res)) = self.inner.as_waves().unwrap().query_variable(
                         &variable.variable_ref,
                         &cursor.to_biguint().unwrap_or_default(),
                     ) {
@@ -871,14 +870,12 @@ impl WaveData {
                                         &variable.variable_ref,
                                         &(cursor - bigone).to_biguint().unwrap_or_default(),
                                     )
-                                {
-                                    if let Some(current) = newres.current {
+                                    && let Some(current) = newres.current {
                                         let newstime = current.0.to_bigint();
                                         if newstime.is_some() {
                                             self.cursor.clone_from(&newstime);
                                         }
                                     }
-                                }
                             } else {
                                 self.cursor = Some(stime);
                             }
@@ -906,9 +903,6 @@ impl WaveData {
                             }
                         }
                     }
-                }
-            }
-        }
     }
 
     pub fn next_displayed_item_ref(&mut self) -> DisplayedItemRef {

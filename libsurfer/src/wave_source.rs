@@ -363,8 +363,8 @@ impl SystemState {
                     };
 
                     // check to see if the response came from a Surfer running in server mode
-                    if let Some(value) = response.headers().get(HTTP_SERVER_KEY) {
-                        if matches!(value.to_str(), Ok(HTTP_SERVER_VALUE_SURFER)) {
+                    if let Some(value) = response.headers().get(HTTP_SERVER_KEY)
+                        && matches!(value.to_str(), Ok(HTTP_SERVER_VALUE_SURFER)) {
                             info!("Connecting to a surfer server at: {url}");
                             // request status and hierarchy
                             Self::get_server_status(sender.clone(), url.clone(), 0);
@@ -375,7 +375,6 @@ impl SystemState {
                             );
                             return;
                         }
-                    }
 
                     // otherwise we load the body to get at the file
                     let bytes = response

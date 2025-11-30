@@ -30,14 +30,12 @@ impl WaveData {
             .find_map(|node| {
                 if let Some(DisplayedItem::Marker(marker)) =
                     self.displayed_items.get(&node.item_ref)
-                {
-                    if marker.idx == idx {
+                    && marker.idx == idx {
                         return marker
                             .color
                             .as_ref()
                             .and_then(|color| theme.get_color(color));
                     }
-                }
                 None
             })
             .unwrap_or(&theme.cursor.color)

@@ -570,11 +570,10 @@ impl SystemState {
             ));
         }
 
-        if displayed_item.has_overwritten_name() {
-            if ui.button("Reset Name").clicked() {
+        if displayed_item.has_overwritten_name()
+            && ui.button("Reset Name").clicked() {
                 msgs.push(Message::ItemNameChange(Some(vidx), None))
             }
-        }
 
         if ui.button("Remove").clicked() {
             msgs.push(
@@ -651,14 +650,13 @@ impl SystemState {
                     vec![]
                 };
                 // the focused item may not yet be selected, so add it
-                if affect_selected {
-                    if let Some(focused_item_node) = waves
+                if affect_selected
+                    && let Some(focused_item_node) = waves
                         .focused_item
                         .and_then(|focused_item| waves.items_tree.get_visible(focused_item))
                     {
                         items.push(focused_item_node.item_ref);
                     }
-                }
 
                 // the clicked item may not be selected yet, add it
                 items.push(displayed_item_id);
