@@ -106,14 +106,14 @@ use crate::displayed_item_tree::VisibleItemIndex;
 use crate::drawing_canvas::TxDrawingCommands;
 use crate::message::Message;
 use crate::transaction_container::{StreamScopeRef, TransactionRef, TransactionStreamRef};
-use crate::translation::{all_translators, AnyTranslator};
+use crate::translation::{AnyTranslator, all_translators};
 use crate::variable_filter::{VariableIOFilterType, VariableNameFilterType};
 use crate::viewport::Viewport;
 use crate::wave_container::VariableRefExt;
 use crate::wave_container::{ScopeRefExt, WaveContainer};
 use crate::wave_data::{ScopeType, WaveData};
 use crate::wave_source::{LoadOptions, WaveFormat, WaveSource};
-use crate::wellen::{convert_format, HeaderResult};
+use crate::wellen::{HeaderResult, convert_format};
 
 /// A number that is non-zero if there are asynchronously triggered operations that
 /// have been triggered but not successfully completed yet. In practice, if this is
@@ -388,7 +388,7 @@ impl SystemState {
                     Some(StreamScopeRef::Stream(stream)) => {
                         let (stream_id, id, name) = inner
                             .get_generator_from_name(Some(stream.stream_id), name)
-                            .map(|gen| (gen.stream_id, gen.id, gen.name.clone()))
+                            .map(|g| (g.stream_id, g.id, g.name.clone()))
                             .unwrap();
 
                         waves.add_generator(TransactionStreamRef::new_gen(stream_id, id, name));
@@ -397,7 +397,7 @@ impl SystemState {
                     None => {
                         let (stream_id, id, name) = inner
                             .get_generator_from_name(None, name)
-                            .map(|gen| (gen.stream_id, gen.id, gen.name.clone()))
+                            .map(|g| (g.stream_id, g.id, g.name.clone()))
                             .unwrap();
 
                         waves.add_generator(TransactionStreamRef::new_gen(stream_id, id, name));
@@ -417,7 +417,7 @@ impl SystemState {
                         .generators
                         .iter()
                         .map(|gen_id| inner.get_generator(*gen_id).unwrap())
-                        .map(|gen| (gen.stream_id, gen.id, gen.name.clone()))
+                        .map(|g| (g.stream_id, g.id, g.name.clone()))
                         .collect_vec();
 
                     for (stream_id, id, name) in gens {
@@ -442,7 +442,8 @@ impl SystemState {
                     waves.focused_item = Some(idx);
                 } else {
                     error!(
-                        "Can not focus variable {} because only {visible_items_len} variables are visible.", idx.0
+                        "Can not focus variable {} because only {visible_items_len} variables are visible.",
+                        idx.0
                     );
                 }
             }
@@ -506,11 +507,10 @@ impl SystemState {
                 waves.focused_item = Some(new_focus_vidx);
             }
             Message::FocusTransaction(tx_ref, tx) => {
-                if tx_ref.is_some() && tx.is_none() {
-                    self.save_current_canvas(format!(
-                        "Focus Transaction id: {}",
-                        tx_ref.as_ref().unwrap().id
-                    ));
+                if let Some(tx_ref) = tx_ref.as_ref()
+                    && tx.is_none()
+                {
+                    self.save_current_canvas(format!("Focus Transaction id: {}", tx_ref.id));
                 }
                 let waves = self.user.waves.as_mut()?;
                 let invalidate = tx.is_none();
@@ -561,10 +561,10 @@ impl SystemState {
                     .map(|name| format!("Remove item {name}"))
                     .unwrap_or("Remove one item".to_string());
                 self.save_current_canvas(undo_msg);
-                if let Some(waves) = self.user.waves.as_mut() {
-                    if let Some(item_ref) = item_ref {
-                        waves.remove_displayed_item(item_ref)
-                    }
+                if let Some(waves) = self.user.waves.as_mut()
+                    && let Some(item_ref) = item_ref
+                {
+                    waves.remove_displayed_item(item_ref)
                 };
             }
             Message::RemoveItems(items) => {
@@ -684,7 +684,9 @@ impl SystemState {
                     waves.viewports[viewport_idx].zoom_to_range(&start, &end, &num_timestamps);
                     self.invalidate_draw_commands();
                 } else {
-                    warn!("Zoom to range: No timestamps count, even though waveforms should be loaded");
+                    warn!(
+                        "Zoom to range: No timestamps count, even though waveforms should be loaded"
+                    );
                 }
             }
             Message::VariableFormatChange(displayed_field_ref, format) => {
@@ -747,13 +749,12 @@ impl SystemState {
                     }
                     MessageTarget::CurrentSelection => {
                         //If an item is focused, update its format too
-                        if let Some(focused) = focused {
-                            if let Some(DisplayedItem::Variable(displayed_variable)) =
+                        if let Some(focused) = focused
+                            && let Some(DisplayedItem::Variable(displayed_variable)) =
                                 waves.displayed_items.get_mut(&focused)
-                            {
-                                update_format(displayed_variable, DisplayedFieldRef::from(focused));
-                                redraw = true;
-                            }
+                        {
+                            update_format(displayed_variable, DisplayedFieldRef::from(focused));
+                            redraw = true;
                         }
                         for item in waves
                             .items_tree
@@ -884,14 +885,15 @@ impl SystemState {
                     // if no cursor is set, move it to
                     // start of visible area transition for next transition
                     // end of visible area for previous transition
-                    if waves.cursor.is_none() && waves.focused_item.is_some() {
-                        if let Some(vp) = waves.viewports.first() {
-                            waves.cursor = if next {
-                                Some(vp.left_edge_time(&num_timestamps))
-                            } else {
-                                Some(vp.right_edge_time(&num_timestamps))
-                            };
-                        }
+                    if waves.cursor.is_none()
+                        && waves.focused_item.is_some()
+                        && let Some(vp) = waves.viewports.first()
+                    {
+                        waves.cursor = if next {
+                            Some(vp.left_edge_time(&num_timestamps))
+                        } else {
+                            Some(vp.right_edge_time(&num_timestamps))
+                        };
                     }
                     waves.set_cursor_at_transition(next, variable, skip_zero);
                     let moved = waves.go_to_cursor_if_not_in_view();
@@ -899,7 +901,9 @@ impl SystemState {
                         self.invalidate_draw_commands();
                     }
                 } else {
-                    warn!("Move cursor to transition: No timestamps count, even though waveforms should be loaded");
+                    warn!(
+                        "Move cursor to transition: No timestamps count, even though waveforms should be loaded"
+                    );
                 }
             }
             Message::MoveTransaction { next } => {
@@ -1402,7 +1406,9 @@ impl SystemState {
                     waves.viewports[viewport_idx].go_to_time(cursor, &num_timestamps);
                     self.invalidate_draw_commands();
                 } else {
-                    warn!("Go to marker position: No timestamps count, even though waveforms should be loaded");
+                    warn!(
+                        "Go to marker position: No timestamps count, even though waveforms should be loaded"
+                    );
                 }
             }
             Message::ChangeVariableNameType(vidx, name_type) => {
@@ -2042,10 +2048,10 @@ impl SystemState {
             return;
         };
 
-        if let Some(text) = get_text(waves, item_ref) {
-            if let Some(ctx) = &self.context {
-                ctx.copy_text(text);
-            }
+        if let Some(text) = get_text(waves, item_ref)
+            && let Some(ctx) = &self.context
+        {
+            ctx.copy_text(text);
         }
     }
 }

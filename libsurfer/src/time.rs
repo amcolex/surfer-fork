@@ -8,14 +8,14 @@ use epaint::{FontId, Stroke};
 use ftr_parser::types::Timescale;
 use itertools::Itertools;
 use num::{BigInt, BigRational, ToPrimitive};
-use pure_rust_locales::{locale_match, Locale};
+use pure_rust_locales::{Locale, locale_match};
 use serde::{Deserialize, Serialize};
 use sys_locale::get_locale;
 
 use crate::config::SurferConfig;
 use crate::viewport::Viewport;
 use crate::wave_data::WaveData;
-use crate::{translation::group_n_chars, view::DrawingContext, Message, SystemState};
+use crate::{Message, SystemState, translation::group_n_chars, view::DrawingContext};
 
 #[derive(Serialize, Deserialize)]
 pub struct TimeScale {
@@ -287,10 +287,10 @@ fn find_auto_scale(time: &BigInt, timescale: &TimeScale) -> TimeUnit {
     let multiplier_digits = timescale.multiplier.unwrap_or(1).ilog10();
     let start_digits = -timescale.unit.exponent();
     for e in (3..=start_digits).step_by(3).rev() {
-        if (time % (BigInt::from(10).pow(e as u32 - multiplier_digits))) == BigInt::from(0) {
-            if let Some(unit) = TimeUnit::from_exponent(e - start_digits) {
-                return unit;
-            }
+        if (time % (BigInt::from(10).pow(e as u32 - multiplier_digits))) == BigInt::from(0)
+            && let Some(unit) = TimeUnit::from_exponent(e - start_digits)
+        {
+            return unit;
         }
     }
     timescale.unit
@@ -463,7 +463,7 @@ pub fn get_ticks(
 mod test {
     use num::BigInt;
 
-    use crate::time::{time_string, TimeFormat, TimeScale, TimeStringFormatting, TimeUnit};
+    use crate::time::{TimeFormat, TimeScale, TimeStringFormatting, TimeUnit, time_string};
 
     #[test]
     fn print_time_standard() {

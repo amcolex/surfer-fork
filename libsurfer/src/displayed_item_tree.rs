@@ -2,8 +2,8 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 
-use crate::displayed_item::DisplayedItemRef;
 use crate::MoveDir;
+use crate::displayed_item::DisplayedItemRef;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Node {
@@ -427,10 +427,10 @@ impl DisplayedItemTree {
         indices: Vec<ItemIndex>,
         target: TargetPosition,
     ) -> Result<(), MoveError> {
-        if let Some(idx) = indices.last() {
-            if idx.0 >= self.items.len() {
-                return Err(MoveError::InvalidIndex);
-            }
+        if let Some(idx) = indices.last()
+            && idx.0 >= self.items.len()
+        {
+            return Err(MoveError::InvalidIndex);
         }
 
         // sort from back to front
