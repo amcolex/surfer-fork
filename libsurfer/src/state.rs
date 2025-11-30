@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{
+    CanvasState, StartupParams,
     clock_highlighting::ClockHighlightType,
     config::{ArrowKeyBindings, AutoLoad, PrimaryMouseDrag, SurferConfig},
     data_container::DataContainer,
@@ -20,11 +21,10 @@ use crate::{
     wave_container::{ScopeRef, VariableRef, WaveContainer},
     wave_data::WaveData,
     wave_source::{LoadOptions, WaveFormat, WaveSource},
-    CanvasState, StartupParams,
 };
 use egui::{
-    style::{Selection, WidgetVisuals, Widgets},
     CornerRadius, Stroke, Visuals,
+    style::{Selection, WidgetVisuals, Widgets},
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -184,13 +184,12 @@ impl SystemState {
             .cloned()
             .collect_vec();
 
-        if recursive {
-            if let Ok(children) = children {
+        if recursive
+            && let Ok(children) = children {
                 for child in children {
                     variables.append(&mut self.get_scope(child, true));
                 }
             }
-        }
 
         variables
     }
@@ -271,8 +270,8 @@ impl SystemState {
 
         self.user.waves = Some(new_wave);
 
-        if !is_reload {
-            if let Some(waves) = &mut self.user.waves {
+        if !is_reload
+            && let Some(waves) = &mut self.user.waves {
                 // Set time unit
                 self.user.wanted_timeunit = waves.inner.metadata().timescale.unit;
                 // Possibly open state file load dialog
@@ -280,7 +279,6 @@ impl SystemState {
                     self.update(Message::SuggestOpenSiblingStateFile);
                 }
             }
-        }
     }
 
     pub(crate) fn on_transaction_streams_loaded(

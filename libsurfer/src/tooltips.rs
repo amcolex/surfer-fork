@@ -17,8 +17,9 @@ fn find_transaction<'a>(
 ) -> Option<&'a Transaction> {
     let txs = waves.inner.as_transactions()?;
     let gen_id = gen_ref.gen_id?;
-    let gen = txs.get_generator(gen_id)?;
-    gen.transactions
+    let generator = txs.get_generator(gen_id)?;
+    generator
+        .transactions
         .iter()
         .find(|transaction| transaction.get_tx_id() == tx_ref.id)
 }
@@ -45,8 +46,8 @@ pub fn variable_tooltip_text(meta: &Option<VariableMeta>, variable: &VariableRef
 pub fn scope_tooltip_text(wave: &WaveData, scope: &ScopeRef, include_parameters: bool) -> String {
     let mut parts = vec![format!("{scope}")];
     if let Some(wave_container) = &wave.inner.as_waves() {
-        if include_parameters {
-            if let Some(waves) = &wave.inner.as_waves() {
+        if include_parameters
+            && let Some(waves) = &wave.inner.as_waves() {
                 for param in waves.parameters_in_scope(scope).iter() {
                     let value = wave_container
                         .query_variable(param, &BigUint::ZERO)
@@ -56,7 +57,6 @@ pub fn scope_tooltip_text(wave: &WaveData, scope: &ScopeRef, include_parameters:
                     parts.push(format!("{}: {}", param.name, value));
                 }
             }
-        }
         let other = wave_container.get_scope_tooltip_data(scope);
         if !other.is_empty() {
             parts.push(other);

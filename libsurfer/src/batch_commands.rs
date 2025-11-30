@@ -4,12 +4,12 @@ use futures::FutureExt as _;
 use tracing::{error, info, trace};
 
 use crate::{
+    SystemState,
     command_parser::get_parser,
     fzcmd::parse_command,
     message::Message,
     spawn,
     wave_source::{LoadProgress, LoadProgressStatus},
-    SystemState,
 };
 
 impl SystemState {
@@ -73,7 +73,9 @@ impl SystemState {
         cmds: I,
     ) -> Vec<Message> {
         trace!("Parsing batch commands");
-        let parsed = cmds
+        
+
+        cmds
             .into_iter()
             // Add line numbers
             .enumerate()
@@ -125,9 +127,7 @@ impl SystemState {
                         .ok()
                 }
             })
-            .collect::<Vec<_>>();
-
-        parsed
+            .collect::<Vec<_>>()
     }
 
     pub fn load_commands_from_url(&mut self, url: String) {

@@ -146,8 +146,8 @@ where
         })
         .unwrap();
 
-    let translator = translators.get_translator(&translator_name);
-    translator
+    
+    (translators.get_translator(&translator_name)) as _
 }
 
 impl WaveData {
@@ -547,10 +547,10 @@ impl WaveData {
             return;
         };
         let is_empty = {
-            let Some(gen) = transactions.get_generator(gen_id) else {
+            let Some(generator) = transactions.get_generator(gen_id) else {
                 return;
             };
-            gen.transactions.is_empty()
+            generator.transactions.is_empty()
         };
         if is_empty {
             info!("(Generator {gen_id}) Loading transactions into memory!");
@@ -564,10 +564,10 @@ impl WaveData {
         }
 
         let mut last_times_on_row = vec![(BigUint::ZERO, BigUint::ZERO)];
-        let Some(gen) = transactions.get_generator(gen_id) else {
+        let Some(generator) = transactions.get_generator(gen_id) else {
             return;
         };
-        calculate_rows_of_stream(&gen.transactions, &mut last_times_on_row);
+        calculate_rows_of_stream(&generator.transactions, &mut last_times_on_row);
 
         let new_gen = DisplayedItem::Stream(DisplayedStream {
             display_name: gen_ref.name.clone(),
@@ -616,13 +616,13 @@ impl WaveData {
         let mut last_times_on_row = vec![(BigUint::ZERO, BigUint::ZERO)];
 
         for gen_id in &stream.generators {
-            let gen = self
+            let generator = self
                 .inner
                 .as_transactions()
                 .unwrap()
                 .get_generator(*gen_id)
                 .unwrap();
-            calculate_rows_of_stream(&gen.transactions, &mut last_times_on_row);
+            calculate_rows_of_stream(&generator.transactions, &mut last_times_on_row);
         }
 
         let new_stream = DisplayedItem::Stream(DisplayedStream {
@@ -834,14 +834,13 @@ impl WaveData {
         variable: Option<VisibleItemIndex>,
         skip_zero: bool,
     ) {
-        if let Some(vidx) = variable.or(self.focused_item) {
-            if let Some(cursor) = &self.cursor {
-                if let Some(DisplayedItem::Variable(variable)) = &self
+        if let Some(vidx) = variable.or(self.focused_item)
+            && let Some(cursor) = &self.cursor
+                && let Some(DisplayedItem::Variable(variable)) = &self
                     .items_tree
                     .get_visible(vidx)
                     .and_then(|node| self.displayed_items.get(&node.item_ref))
-                {
-                    if let Ok(Some(res)) = self.inner.as_waves().unwrap().query_variable(
+                    && let Ok(Some(res)) = self.inner.as_waves().unwrap().query_variable(
                         &variable.variable_ref,
                         &cursor.to_biguint().unwrap_or_default(),
                     ) {
@@ -856,7 +855,9 @@ impl WaveData {
                                 if let Some(end_time) = self.num_timestamps() {
                                     self.cursor = Some(end_time);
                                 } else {
-                                    warn!("Set cursor at transition: No timestamp count even though waveforms should be loaded");
+                                    warn!(
+                                        "Set cursor at transition: No timestamp count even though waveforms should be loaded"
+                                    );
                                 }
                             }
                         } else if let Some(stime) = res.current.unwrap().0.to_bigint() {
@@ -869,14 +870,12 @@ impl WaveData {
                                         &variable.variable_ref,
                                         &(cursor - bigone).to_biguint().unwrap_or_default(),
                                     )
-                                {
-                                    if let Some(current) = newres.current {
+                                    && let Some(current) = newres.current {
                                         let newstime = current.0.to_bigint();
                                         if newstime.is_some() {
                                             self.cursor.clone_from(&newstime);
                                         }
                                     }
-                                }
                             } else {
                                 self.cursor = Some(stime);
                             }
@@ -904,9 +903,6 @@ impl WaveData {
                             }
                         }
                     }
-                }
-            }
-        }
     }
 
     pub fn next_displayed_item_ref(&mut self) -> DisplayedItemRef {

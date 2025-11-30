@@ -551,14 +551,13 @@ impl SurferTheme {
 
         let mut add_themes_from_dir = |dir: ReadDir| {
             for theme in dir.flatten() {
-                if let Ok(theme_path) = theme.file_name().into_string() {
-                    if let Some(fname_str) = theme_path.strip_suffix(".toml") {
+                if let Ok(theme_path) = theme.file_name().into_string()
+                    && let Some(fname_str) = theme_path.strip_suffix(".toml") {
                         let fname = fname_str.to_string();
                         if !fname.is_empty() && !theme_names.contains(&fname) {
                             theme_names.push(fname);
                         }
                     }
-                }
             }
         };
 
@@ -695,7 +694,9 @@ impl SurferConfig {
 
             let old_config_path = Path::new(OLD_CONFIG_FILE);
             if old_config_path.exists() {
-                warn!("Configuration in 'surfer.toml' is deprecated. Please move your configuration to '.surfer/config.toml'.");
+                warn!(
+                    "Configuration in 'surfer.toml' is deprecated. Please move your configuration to '.surfer/config.toml'."
+                );
             }
 
             // `surfer.toml` will not be searched for upward, as it is deprecated.

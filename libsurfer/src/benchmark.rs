@@ -9,7 +9,7 @@ use egui_plot::{Legend, Line, Plot, PlotPoints, PlotUi};
 use itertools::Itertools;
 use tracing::warn;
 
-use crate::{message::Message, SystemState};
+use crate::{SystemState, message::Message};
 
 pub const NUM_PERF_SAMPLES: usize = 1000;
 
@@ -117,11 +117,10 @@ impl Timing {
 
     pub fn start(&mut self, name: impl Into<String>) {
         let name = name.into();
-        if let Some(reg) = self.regions.get_mut(&self.active_region) {
-            if !reg.subregions.contains(&name) {
+        if let Some(reg) = self.regions.get_mut(&self.active_region)
+            && !reg.subregions.contains(&name) {
                 reg.subregions.insert(name.clone());
             }
-        }
 
         self.active_region.push(name);
 
@@ -149,7 +148,9 @@ impl Timing {
         }
         if let Some(reg_name) = self.active_region.pop() {
             if reg_name != name {
-                warn!("Ended timing region {reg_name} but used {name}. Timing reports will be unreliable");
+                warn!(
+                    "Ended timing region {reg_name} but used {name}. Timing reports will be unreliable"
+                );
             }
         } else {
             warn!("Ended timing region {name} with no timing region active");

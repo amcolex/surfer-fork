@@ -16,6 +16,7 @@ use surfer_translation_types::{
 };
 use tracing::{error, warn};
 
+use crate::CachedDrawData::TransactionDrawData;
 use crate::clock_highlighting::draw_clock_edge_marks;
 use crate::config::SurferTheme;
 use crate::data_container::DataContainer;
@@ -29,10 +30,9 @@ use crate::view::{DrawConfig, DrawingContext, ItemDrawingInfo};
 use crate::viewport::Viewport;
 use crate::wave_container::{QueryResult, VariableRefExt};
 use crate::wave_data::WaveData;
-use crate::CachedDrawData::TransactionDrawData;
 use crate::{
-    displayed_item::DisplayedItem, CachedDrawData, CachedTransactionDrawData, CachedWaveDrawData,
-    Message, SystemState,
+    CachedDrawData, CachedTransactionDrawData, CachedWaveDrawData, Message, SystemState,
+    displayed_item::DisplayedItem,
 };
 
 pub struct DrawnRegion {
@@ -467,9 +467,9 @@ impl SystemState {
                 );
             }
 
-            for gen in &generators {
+            for generator in &generators {
                 // find first visible transaction
-                let first_visible_transaction_index = match gen
+                let first_visible_transaction_index = match generator
                     .transactions
                     .binary_search_by_key(&first_visible_timestamp, |tx| tx.get_end_time())
                 {
@@ -477,7 +477,7 @@ impl SystemState {
                     Err(i) => i,
                 }
                 .saturating_sub(1);
-                let transactions = gen
+                let transactions = generator
                     .transactions
                     .iter()
                     .skip(first_visible_transaction_index);
@@ -496,11 +496,10 @@ impl SystemState {
                         break;
                     }
 
-                    if let Some(focused_tx_ref) = focused_tx_ref {
-                        if curr_tx_id == focused_tx_ref.id {
+                    if let Some(focused_tx_ref) = focused_tx_ref
+                        && curr_tx_id == focused_tx_ref.id {
                             new_focused_tx = Some(tx);
                         }
-                    }
 
                     let min_px = viewport.pixel_from_time(
                         &start_time.to_bigint().unwrap(),
@@ -532,8 +531,8 @@ impl SystemState {
                             max,
                             gen_ref: TransactionStreamRef::new_gen(
                                 tx_stream_ref.stream_id,
-                                gen.id,
-                                gen.name.clone(),
+                                generator.id,
+                                generator.name.clone(),
                             ),
                         },
                     );
@@ -673,13 +672,11 @@ impl SystemState {
         if !modifiers.command
             && ((response.dragged_by(PointerButton::Primary) && !self.do_measure(&modifiers))
                 || response.clicked_by(PointerButton::Primary))
-        {
-            if let Some(snap_point) =
+            && let Some(snap_point) =
                 self.snap_to_edge(pointer_pos_canvas, waves, frame_width, viewport_idx)
             {
                 msgs.push(Message::CursorSet(snap_point));
             }
-        }
 
         // Draw background
         painter.rect_filled(
@@ -1444,13 +1441,12 @@ impl SystemState {
         let viewport = &waves.viewports[viewport_idx];
         let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
         let timestamp = viewport.as_time_bigint(pos.x, frame_width, &num_timestamps);
-        if let Some(utimestamp) = timestamp.to_biguint() {
-            if let Some(vidx) = waves.get_item_at_y(pos.y) {
-                if let Some(node) = waves.items_tree.get_visible(vidx) {
-                    if let Some(DisplayedItem::Variable(variable)) =
+        if let Some(utimestamp) = timestamp.to_biguint()
+            && let Some(vidx) = waves.get_item_at_y(pos.y)
+                && let Some(node) = waves.items_tree.get_visible(vidx)
+                    && let Some(DisplayedItem::Variable(variable)) =
                         &waves.displayed_items.get(&node.item_ref)
-                    {
-                        if let Ok(Some(res)) = waves
+                        && let Ok(Some(res)) = waves
                             .inner
                             .as_waves()
                             .unwrap()
@@ -1477,10 +1473,6 @@ impl SystemState {
                                 return Some(next_time.clone());
                             }
                         }
-                    }
-                }
-            }
-        }
         Some(timestamp)
     }
 

@@ -4,7 +4,7 @@ use web_time::{Duration, Instant};
 
 use crate::time::{time_string, timeunit_menu};
 use crate::wave_source::draw_progress_information;
-use crate::{message::Message, wave_data::WaveData, SystemState};
+use crate::{SystemState, message::Message, wave_data::WaveData};
 
 /// Spacing between status bar elements (in pixels)
 const STATUS_SPACING: f32 = 10.0;
@@ -60,13 +60,12 @@ impl SystemState {
         }
 
         ui.add_space(STATUS_SPACING);
-        if let Some(progress_data) = &self.progress_tracker {
-            if Instant::now().duration_since(progress_data.started)
+        if let Some(progress_data) = &self.progress_tracker
+            && Instant::now().duration_since(progress_data.started)
                 > Duration::from_millis(PROGRESS_DEBOUNCE_MS)
             {
                 draw_progress_information(ui, progress_data);
             }
-        }
     }
 
     /// Draw right-aligned status bar elements: cursor time, undo info, and count

@@ -5,9 +5,9 @@ use emath::Vec2;
 use crate::config::ArrowKeyBindings;
 use crate::message::MessageTarget;
 use crate::{
+    MoveDir, SystemState,
     message::Message,
     wave_data::{PER_SCROLL_EVENT, SCROLL_EVENTS_PER_PAGE},
-    MoveDir, SystemState,
 };
 
 impl SystemState {
@@ -58,11 +58,10 @@ impl SystemState {
                     }
                     (Key::Home, true, false, false) => msgs.push(Message::ScrollToItem(0)),
                     (Key::End, true, false, false) => {
-                        if let Some(waves) = &self.user.waves {
-                            if waves.displayed_items.len() > 1 {
+                        if let Some(waves) = &self.user.waves
+                            && waves.displayed_items.len() > 1 {
                                 msgs.push(Message::ScrollToItem(waves.displayed_items.len() - 1));
                             }
-                        }
                     }
                     (Key::Space, true, false, false) => {
                         msgs.push(Message::ShowCommandPrompt("".to_string(), None))
@@ -141,8 +140,8 @@ impl SystemState {
                     (Key::M, true, false, false) => {
                         if modifiers.alt {
                             msgs.push(Message::SetMenuVisible(!self.show_menu()));
-                        } else if let Some(waves) = self.user.waves.as_ref() {
-                            if let Some(cursor) = waves.cursor.as_ref() {
+                        } else if let Some(waves) = self.user.waves.as_ref()
+                            && let Some(cursor) = waves.cursor.as_ref() {
                                 // Check if a marker already exists at the cursor position
                                 let marker_exists = waves
                                     .markers
@@ -160,7 +159,6 @@ impl SystemState {
                                     });
                                 }
                             }
-                        }
                     }
                     (Key::N, true, true, false) => {
                         if modifiers.command {
@@ -211,14 +209,13 @@ impl SystemState {
                         }
                     }
                     (Key::F2, true, false, _) => {
-                        if let Some(waves) = &self.user.waves {
-                            if waves.focused_item.is_some() {
+                        if let Some(waves) = &self.user.waves
+                            && waves.focused_item.is_some() {
                                 msgs.push(Message::ShowCommandPrompt(
                                     "rename_item ".to_owned(),
                                     None,
                                 ));
                             }
-                        }
                     }
                     (Key::F11, true, false, _) => msgs.push(Message::ToggleFullscreen),
                     (Key::Minus, true, false, false) => {

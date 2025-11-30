@@ -11,17 +11,18 @@ use egui::{
 };
 use emath::{Align, GuiRounding, Pos2, Rect, RectTransform, Vec2};
 use epaint::{
-    text::{FontId, LayoutJob, TextFormat, TextWrapMode},
     CornerRadiusF32, Margin, Shape, Stroke,
+    text::{FontId, LayoutJob, TextFormat, TextWrapMode},
 };
 use itertools::Itertools;
 use tracing::info;
 
 use surfer_translation_types::{
-    translator::{TrueName, VariableNameInfo},
     SubFieldFlatTranslationResult, TranslatedValue, Translator, VariableInfo,
+    translator::{TrueName, VariableNameInfo},
 };
 
+use crate::OUTSTANDING_TRANSACTIONS;
 #[cfg(feature = "performance_plot")]
 use crate::benchmark::NUM_PERF_SAMPLES;
 use crate::command_parser::get_parser;
@@ -36,10 +37,9 @@ use crate::transaction_container::TransactionStreamRef;
 use crate::translation::TranslationResultExt;
 use crate::util::uint_idx_to_alpha_idx;
 use crate::wave_container::{FieldRef, FieldRefExt, VariableRef, WaveContainer};
-use crate::OUTSTANDING_TRANSACTIONS;
 use crate::{
-    command_prompt::show_command_prompt, hierarchy::HierarchyStyle, wave_data::WaveData, Message,
-    MoveDir, SystemState,
+    Message, MoveDir, SystemState, command_prompt::show_command_prompt, hierarchy::HierarchyStyle,
+    wave_data::WaveData,
 };
 
 pub struct DrawingContext<'a> {
@@ -309,11 +309,10 @@ impl SystemState {
             self.draw_performance_graph(ctx, &mut msgs);
         }
 
-        if self.user.show_cursor_window {
-            if let Some(waves) = &self.user.waves {
+        if self.user.show_cursor_window
+            && let Some(waves) = &self.user.waves {
                 self.draw_marker_window(waves, ctx, &mut msgs);
             }
-        }
 
         if self
             .user
@@ -334,11 +333,10 @@ impl SystemState {
         if self.show_statusbar() {
             self.add_statusbar_panel(ctx, &self.user.waves, &mut msgs);
         }
-        if let Some(waves) = &self.user.waves {
-            if self.show_overview() && !waves.items_tree.is_empty() {
+        if let Some(waves) = &self.user.waves
+            && self.show_overview() && !waves.items_tree.is_empty() {
                 self.add_overview_panel(ctx, waves, &mut msgs);
             }
-        }
 
         if self.show_hierarchy() {
             SidePanel::left("variable select left panel")
@@ -711,11 +709,7 @@ impl SystemState {
                                 let levels_to_force_expand =
                                     self.items_to_expand.borrow().iter().find_map(
                                         |(id, levels)| {
-                                            if item_ref == id {
-                                                Some(*levels)
-                                            } else {
-                                                None
-                                            }
+                                            if item_ref == id { Some(*levels) } else { None }
                                         },
                                     );
 
@@ -1490,23 +1484,23 @@ impl SystemState {
     ) -> Option<VariableNameInfo> {
         let meta = wave_container.variable_meta(var).ok();
 
-        let info = self
+        
+
+        self
             .variable_name_info_cache
             .borrow_mut()
             .entry(var.clone())
             .or_insert_with(|| {
                 meta.as_ref().and_then(|meta| {
-                    let info = self
+                    
+                    self
                         .translators
                         .all_translators()
                         .iter()
-                        .find_map(|t| t.variable_name_info(meta));
-                    info
+                        .find_map(|t| t.variable_name_info(meta))
                 })
             })
-            .clone();
-
-        info
+            .clone()
     }
 
     pub fn draw_background(
@@ -1531,11 +1525,10 @@ impl SystemState {
         drawing_info: &ItemDrawingInfo,
         vidx: VisibleItemIndex,
     ) -> Color32 {
-        if let Some(focused) = waves.focused_item {
-            if self.highlight_focused() && focused == vidx {
+        if let Some(focused) = waves.focused_item
+            && self.highlight_focused() && focused == vidx {
                 return self.user.config.theme.highlight_background;
             }
-        }
         *waves
             .displayed_items
             .get(
