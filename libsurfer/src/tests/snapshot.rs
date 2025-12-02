@@ -1477,10 +1477,7 @@ snapshot_ui!(load_keep_all_works, || {
                 .join("xx_2.vcd")
                 .try_into()
                 .unwrap(),
-            LoadOptions {
-                keep_variables: true,
-                keep_unavailable: true,
-            },
+            LoadOptions::KeepAll,
         ),
     ];
     for message in msgs {
@@ -1542,10 +1539,7 @@ snapshot_ui!(load_keep_signal_remove_unavailable_works, || {
                 .join("xx_2.vcd")
                 .try_into()
                 .unwrap(),
-            LoadOptions {
-                keep_variables: true,
-                keep_unavailable: false,
-            },
+            LoadOptions::KeepAvailable,
         ),
     ];
     for message in msgs {
@@ -1761,10 +1755,7 @@ snapshot_ui!(signals_can_be_added_after_file_switch, || {
     ]));
     state.update(Message::LoadFile(
         project_root.join("examples/counter2.vcd"),
-        LoadOptions {
-            keep_variables: true,
-            keep_unavailable: false,
-        },
+        LoadOptions::KeepAvailable,
     ));
 
     loop {
@@ -2055,10 +2046,7 @@ snapshot_ui!(switch, || {
             .join("examples/with_1_bit.vcd")
             .try_into()
             .unwrap(),
-        LoadOptions {
-            keep_variables: true,
-            keep_unavailable: true,
-        },
+        LoadOptions::KeepAll,
     ));
 
     handle_messages_until(
@@ -2127,10 +2115,7 @@ snapshot_ui!(switch_and_switch_back, || {
             .join("examples/with_1_bit.vcd")
             .try_into()
             .unwrap(),
-        LoadOptions {
-            keep_variables: true,
-            keep_unavailable: true,
-        },
+        LoadOptions::KeepAll,
     ));
 
     handle_messages_until(
@@ -2145,10 +2130,7 @@ snapshot_ui!(switch_and_switch_back, || {
             .join("examples/with_8_bit.vcd")
             .try_into()
             .unwrap(),
-        LoadOptions {
-            keep_variables: true,
-            keep_unavailable: true,
-        },
+        LoadOptions::KeepAll,
     ));
     handle_messages_until(
         &mut state,
