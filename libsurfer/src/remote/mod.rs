@@ -3,8 +3,8 @@ mod client;
 use serde::{Deserialize, Serialize};
 
 pub use client::{
-    get_hierarchy_from_server, get_server_status, get_signals, get_time_table_from_server,
-    server_reload, ReloadError,
+    ReloadError, get_hierarchy_from_server, get_server_status, get_signals,
+    get_time_table_from_server, server_reload,
 };
 
 #[derive(Serialize, Deserialize)]

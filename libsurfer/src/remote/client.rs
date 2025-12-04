@@ -1,8 +1,8 @@
-use std::sync::mpsc::Sender;
 use std::sync::Arc;
+use std::sync::mpsc::Sender;
 
 use bincode::Options;
-use eyre::{anyhow, Context, Result};
+use eyre::{Context, Result, anyhow};
 use eyre::{bail, eyre};
 use reqwest::StatusCode;
 use thiserror::Error;
@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use wellen::CompressedTimeTable;
 
 use surver::{
-    SurverStatus, BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION,
+    BINCODE_OPTIONS, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SURFER_VERSION, SurverStatus,
     WELLEN_VERSION, X_SURFER_VERSION, X_WELLEN_VERSION,
 };
 
@@ -23,8 +23,6 @@ use crate::wellen::{BodyResult, HeaderResult};
 
 #[derive(Debug, Error)]
 pub enum ReloadError {
-    #[error("Reload requested too frequently, please wait before trying again")]
-    TooFrequent,
     #[error("File unchanged since last reload")]
     FileUnchanged,
     #[error("Unexpected response code: {0}")]
@@ -86,10 +84,6 @@ async fn reload(server: String) -> std::result::Result<SurverStatus, ReloadError
     let status_code = response.status();
     let body = response.text().await?;
     match status_code {
-        StatusCode::TOO_MANY_REQUESTS => {
-            info!("Reload too frequent");
-            Err(ReloadError::TooFrequent)
-        }
         StatusCode::NOT_MODIFIED => {
             info!("File unchanged");
             Err(ReloadError::FileUnchanged)
@@ -253,10 +247,6 @@ pub fn server_reload(sender: Sender<Message>, server: String, delay_ms: u64) {
 
         let msg = match res {
             Ok(status) => Message::SurferServerStatus(start, server, status),
-            Err(crate::remote::ReloadError::TooFrequent) => {
-                info!("Reload request was rate-limited by server");
-                return; // Don't send error message for expected rate limiting
-            }
             Err(crate::remote::ReloadError::FileUnchanged) => {
                 info!("File unchanged, no reload needed");
                 return; // Don't send error message for unchanged file

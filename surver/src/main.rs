@@ -4,7 +4,7 @@ use eyre::Result;
 use std::io::stdout;
 use tokio::runtime::Builder;
 use tracing::subscriber::set_global_default;
-use tracing_subscriber::{fmt, layer::SubscriberExt, EnvFilter, Layer, Registry};
+use tracing_subscriber::{EnvFilter, Layer, Registry, fmt, layer::SubscriberExt};
 
 #[derive(clap::Parser, Default)]
 #[command(version = concat!(env!("CARGO_PKG_VERSION"), " (git: ", env!("VERGEN_GIT_DESCRIBE"), ")"), about)]
@@ -20,14 +20,10 @@ struct Args {
     /// Token used by the client to authenticate to the server
     #[clap(long)]
     token: Option<String>,
-    #[clap(long)]
-    /// Seconds to guard against repeated reloads, default 1 s
-    reload_guard: Option<u64>,
 }
 
 /// Starts the logging and error handling. Can be used by unittests to get more insights.
 pub fn start_logging() -> Result<()> {
-
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
     let subscriber = Registry::default().with(
         fmt::layer()
@@ -56,7 +52,6 @@ fn main() -> Result<()> {
     // Use CLI override if provided, otherwise use hardcoded defaults
     let bind_addr = args.bind_address.unwrap_or_else(|| "127.0.0.1".to_string());
     let port = args.port.unwrap_or(8911);
-    let reload_guard = args.reload_guard.unwrap_or(1);
 
     runtime.block_on(surver::server_main(
         port,
@@ -64,6 +59,5 @@ fn main() -> Result<()> {
         args.token,
         args.wave_file,
         None,
-        reload_guard,
     ))
 }

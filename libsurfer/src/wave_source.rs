@@ -27,7 +27,7 @@ use crate::wellen::{
 };
 use crate::{SystemState, message::Message};
 use surver::{
-    SurverStatus, HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, WELLEN_SURFER_DEFAULT_OPTIONS,
+    HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SurverStatus, WELLEN_SURFER_DEFAULT_OPTIONS,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
@@ -366,22 +366,22 @@ impl SystemState {
 
                     // check to see if the response came from a Surfer running in server mode
 
-                    if let Some(value) = response.headers().get(HTTP_SERVER_KEY) &&
-                        matches!(value.to_str(), Ok(HTTP_SERVER_VALUE_SURFER)) {
-                            if load_options.keep_variables {
-                                // Request a reload (will also get status)
-                                info!("Reloading from surfer server at: {url}");
-                                server_reload(sender.clone(), url.clone(), 0);
-                            } else {
-                                info!("Connecting to a surfer server at: {url}");
-                                // Request status
-                                get_server_status(sender.clone(), url.clone(), 0);
-                            }
-                            // Request hierarchy
-                            get_hierarchy_from_server(sender.clone(), url.clone(), load_options);
-                            return;
+                    if let Some(value) = response.headers().get(HTTP_SERVER_KEY)
+                        && matches!(value.to_str(), Ok(HTTP_SERVER_VALUE_SURFER))
+                    {
+                        if load_options.keep_variables {
+                            // Request a reload (will also get status)
+                            info!("Reloading from surfer server at: {url}");
+                            server_reload(sender.clone(), url.clone(), 0);
+                        } else {
+                            info!("Connecting to a surfer server at: {url}");
+                            // Request status
+                            get_server_status(sender.clone(), url.clone(), 0);
                         }
-
+                        // Request hierarchy
+                        get_hierarchy_from_server(sender.clone(), url.clone(), load_options);
+                        return;
+                    }
 
                     // otherwise we load the body to get at the file
                     let bytes = response
