@@ -1,8 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::{fs, time::Duration};
 
@@ -36,7 +36,6 @@ async fn server_reload_with_overwrite() {
     fs::copy(&src1, &dest).expect("copy counter.vcd to temp");
 
     let token = "reloadtoken123456".to_string(); // >= MIN_TOKEN_LEN
-    let reload_guard_secs = 1; // small guard interval
 
     let started = Arc::new(AtomicBool::new(false));
     let started_clone = started.clone();
@@ -51,7 +50,6 @@ async fn server_reload_with_overwrite() {
             Some(token_clone),
             dest_clone.to_string_lossy().to_string(),
             Some(started_clone),
-            reload_guard_secs as u64,
         )
         .await
         {
@@ -127,20 +125,7 @@ async fn server_reload_with_overwrite() {
     }
     assert!(reload_complete, "reload did not finish in expected time");
 
-    // 2) Immediate second reload should be rate-limited (429)
-    let resp = client.get(format!("{}/reload", base)).send().await.unwrap();
-    assert_eq!(
-        resp.status(),
-        StatusCode::TOO_MANY_REQUESTS,
-        "second reload too soon should be 429"
-    );
-    let body = resp.text().await.unwrap();
-    assert!(body.contains("Reload too frequent"));
-
-    // Wait past reload_guard to allow next reload attempt
-    tokio::time::sleep(Duration::from_secs(reload_guard_secs as u64 + 1)).await;
-
-    // 3) Reload after guard but with unchanged file -> 304 Not Modified
+    // 2) Reload with unchanged file -> 304 Not Modified
     let resp = client.get(format!("{}/reload", base)).send().await.unwrap();
     assert_eq!(
         resp.status(),
