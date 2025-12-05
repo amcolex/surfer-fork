@@ -13,7 +13,7 @@ use surfer_translation_types::{
     TranslationPreference, TranslationResult, Translator, VariableInfo, VariableMeta,
     VariableNameInfo, VariableValue,
 };
-use tracing::{error, warn};
+use tracing::{error, warn, info};
 
 use crate::message::Message;
 use crate::wave_container::{ScopeId, VarId};
@@ -33,6 +33,7 @@ pub fn discover_wasm_translators() -> Vec<Message> {
     let plugin_files = search_dirs
         .into_iter()
         .flat_map(|dir| {
+            info!("Looking for translators in {}",dir.display());
             if !dir.exists() {
                 return vec![];
             }
@@ -43,6 +44,7 @@ pub fn discover_wasm_translators() -> Vec<Message> {
                             Ok(entry) => {
                                 let path = entry.path();
                                 if path.extension() == Some(&OsString::from("wasm")) {
+                                    info!("Found {}",path.display());
                                     Some(path)
                                 } else {
                                     None
