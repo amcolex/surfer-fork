@@ -8,12 +8,13 @@ variables:
     PACKAGE_REGISTRY_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/surfer/${CI_COMMIT_TAG}"
 
 stages:
+    - cache
     - test
     - deploy
     - upload
     - release
 
-default:
+.individual-cache:
   cache:
     key:
       # New cache if Cargo.lock changes (when adding/updating dependencies)
@@ -45,9 +46,183 @@ workflow:
     expire_in: 1h
     when: on_failure
 
+prepare-linux-cache:
+    stage: cache
+    script:
+        - cargo build
+        - cargo build --release
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "linux"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull-push
+    rules:
+        - changes:
+            - Cargo.lock
+
+.use-linux-cache:
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "linux"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull
+
+prepare-linux-cache-1.88:
+    stage: cache
+    script:
+        - cargo build
+        - cargo build --release
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "linux-1.88"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull-push
+    rules:
+        - changes:
+            - Cargo.lock
+
+.use-linux-cache-1.88:
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "linux-1.88"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull
+
+prepare-linux-arm64-cache:
+    stage: cache
+    tags:
+        - saas-linux-small-arm64
+    script:
+        - cargo build
+        - cargo build --release
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "linux-arm64"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull-push
+    rules:
+        - changes:
+            - Cargo.lock
+
+.use-linux-arm64-cache:
+    tags:
+        - saas-linux-small-arm64
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "linux-arm64"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull
+
+prepare-windows-cache:
+    stage: cache
+    tags:
+        - saas-windows-medium-amd64
+    script:
+        - Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -OutFile .\rustup-init.exe -UseBasicParsing
+        - ICACLS ".\rustup-init.exe" /grant:r "users:(RX)" /C
+        - .\rustup-init.exe -y
+        - $env:Path += ";C:\GitLab-Runner\builds\${CI_PROJECT_NAMESPACE}\surfer\cargo\bin"
+        - cargo build
+        - cargo build --release
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "windows"
+        paths:
+            - target
+            - $CARGO_HOME
+            - cargo
+        policy: pull-push
+    rules:
+        - changes:
+            - Cargo.lock
+
+.use-windows-cache:
+    tags:
+        - saas-windows-medium-amd64
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "windows"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull
+
+prepare-macos-aarch64-cache:
+    stage: cache
+    tags:
+        - saas-macos-medium-m1
+    image: macos-14-xcode-15
+    before_script:
+        - brew install rustup-init
+        - ulimit -n 1000
+        - rustup install 1.88
+        - rustup override set 1.88
+    script:
+        - cargo build
+        - cargo build --release
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "macos-aarch64"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull-push
+    rules:
+        - changes:
+            - Cargo.lock
+
+.use-macos-aarch64-cache:
+    tags:
+        - saas-macos-medium-m1
+    image: macos-14-xcode-15
+    before_script:
+        - brew install rustup-init
+        - rustup install 1.88
+        - rustup override set 1.88
+    cache:
+        key:
+            files:
+                - Cargo.lock
+            prefix: "macos-aarch64"
+        paths:
+            - target
+            - $CARGO_HOME
+        policy: pull
+
 clippy:
     stage: test
     extends: .build-dependencies
+    extends: .use-linux-cache
     before_script:
         - rustup component add clippy
         - cargo install gitlab_clippy
@@ -64,6 +239,7 @@ clippy:
 cargo_about:
     stage: test
     extends: .build-dependencies
+    extends: .use-linux-cache
     before_script:
         - cargo install --locked cargo-about
     script:
@@ -72,6 +248,7 @@ cargo_about:
 build_book:
     stage: test
     extends: .build-dependencies
+    extends: .use-linux-cache
     before_script:
         - cargo install --no-default-features --features search --locked mdbook
     script:
@@ -82,6 +259,7 @@ build_book:
 test:
     stage: test
     extends: .snapshots
+    extends: .use-linux-cache
     script:
         - rustc -V
         - cargo -V
@@ -89,6 +267,7 @@ test:
 
 linux_install:
     stage: test
+    extends: .use-linux-cache
     script:
         - apt-get update -y
         - apt-get install -y openssl libssl-dev zip
@@ -100,23 +279,18 @@ linux_install:
     interruptible: true
 
 test-linux-arm64:
-    tags:
-        - saas-linux-small-arm64
     stage: test
     extends: .snapshots
+    extends: .use-linux-arm64-cache
     script:
         - rustc -V
         - cargo -V
         - cargo test --features python --color=always --locked -- --include-ignored
 
 test-windows:
-    tags:
-        - saas-windows-medium-amd64
+    extends: .use-windows-cache
     stage: test
     script:
-        - Invoke-WebRequest https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe -OutFile .\rustup-init.exe -UseBasicParsing
-        - ICACLS ".\rustup-init.exe" /grant:r "users:(RX)" /C
-        - .\rustup-init.exe -y
         - $env:Path += ";C:\GitLab-Runner\builds\${CI_PROJECT_NAMESPACE}\surfer\cargo\bin"
         - rustc -V
         - cargo -V
@@ -126,6 +300,7 @@ test-windows:
 test-no-default-features:
     stage: test
     extends: .snapshots
+    extends: .use-linux-cache
     script:
         - rustc -V
         - cargo -V
@@ -134,6 +309,7 @@ test-no-default-features:
 test-all-features:
     stage: test
     extends: .snapshots
+    extends: .use-linux-cache
     script:
         - rustc -V
         - cargo -V
@@ -144,6 +320,7 @@ test-oldest-supported:
     image: rust:1.88
     stage: test
     extends: .snapshots
+    extends: .use-linux-cache-1.88
     script:
         - rustc -V
         - cargo -V
@@ -163,6 +340,7 @@ test-beta:
     image: "instrumentisto/rust:beta"
     stage: test
     extends: .snapshots
+    extends: .individual-cache
     script:
         - apt install -y ninja-build clang
         - rustc -V
@@ -174,6 +352,7 @@ test-nightly:
     image: "rustlang/rust:nightly"
     stage: test
     extends: .snapshots
+    extends: .individual-cache
     script:
         - apt install -y ninja-build clang
         - rustc -V
@@ -184,18 +363,11 @@ test-nightly:
 test-macos-aarch64:
     stage: test
     extends: .snapshots
+    extends: .use-macos-aarch64-cache
     variables:
         HOMEBREW_NO_AUTO_UPDATE: 1
         HOMEBREW_NO_ENV_HINTS: 1
         HOMEBREW_NO_INSTALL_CLEANUP: 1
-    tags:
-        - saas-macos-medium-m1
-    image: macos-14-xcode-15
-    before_script:
-        - brew install rustup-init
-        - ulimit -n 1000
-        - rustup install 1.88
-        - rustup override set 1.88
     script:
         - rustc -V
         - cargo -V
@@ -214,6 +386,7 @@ coverage:
     image: xd009642/tarpaulin
     stage: test
     extends: .build-dependencies
+    extends: .individual-cache # separate cache due to diverging settings
     interruptible: true
     script:
         - rustc -V
@@ -234,6 +407,7 @@ coverage:
         expire_in: 1 week
     allow_failure: true # Often runs out of disk space
 
+# TODO clippy is already run above, fmt should be run as part of that
 pre-commit:
     stage: test
     variables:
@@ -249,15 +423,14 @@ pre-commit:
         - python3 -m pip install pre-commit
         - pre-commit install
         - rustup component add rustfmt
-        - rustup component add clippy
         - git fetch origin ${CI_DEFAULT_BRANCH}
     script:
-        - SKIP=cargo-test,cargo-check pre-commit run --from-ref origin/${CI_DEFAULT_BRANCH} --to-ref HEAD
+        - SKIP=cargo-test,cargo-check,cargo-clippy pre-commit run --from-ref origin/${CI_DEFAULT_BRANCH} --to-ref HEAD
     interruptible: true
 
 typos-and-todos:
     stage: test
-    cache: [] # Disable cache since the spell checker finds typos in other peoples source code
+    # No cache since the spell checker finds typos in other peoples source code
     before_script:
         - apt update
         - apt install -y wget
@@ -282,6 +455,7 @@ typos-and-todos:
 
 linux_build:
     stage: deploy
+    extends: .use-linux-cache
     needs: [test]
     script:
         - apt-get update -y
@@ -306,6 +480,7 @@ rocky_build:
     image: rockylinux:8
     needs: [test]
     stage: deploy
+    extends: .individual-cache
     script:
         - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
         - . "/builds/surfer-project/surfer/cargo/env"
@@ -332,9 +507,8 @@ rocky_build:
     interruptible: true
 
 linux_arm64_build:
-    tags:
-        - saas-linux-small-arm64
     stage: deploy
+    extends: .use-linux-arm64-cache
     needs: [test-linux-arm64]
     script:
         - apt-get update -y
@@ -358,7 +532,9 @@ linux_arm64_build:
 windows_build:
     stage: deploy
     needs: [test-windows]
+    extends: .use-windows-cache
     script:
+        - $env:Path += ";C:\GitLab-Runner\builds\${CI_PROJECT_NAMESPACE}\surfer\cargo\bin"
         - apt-get update -y
         - apt-get install -y mingw-w64 zip
         - git fetch --tags
@@ -381,17 +557,12 @@ windows_build:
 macos-aarch64_build:
     stage: deploy
     needs: [test-macos-aarch64]
+    extends: .use-macos-aarch64-cache
     variables:
         HOMEBREW_NO_AUTO_UPDATE: 1
         HOMEBREW_NO_ENV_HINTS: 1
         HOMEBREW_NO_INSTALL_CLEANUP: 1
-    tags:
-        - saas-macos-medium-m1
-    image: macos-14-xcode-15
     before_script:
-        - brew install rustup-init
-        - rustup install 1.88
-        - rustup override set 1.88
         - cargo -V
         - rustc -V
         - git fetch --tags
@@ -425,6 +596,7 @@ trigger-docs:
 pages_build:
     stage: test
     extends: .build-dependencies
+    extends: .individual-cache # TODO wrong folder cached? do we have enough to get a wasm32 cache?
     script:
         - git fetch --tags
         - rustup target add wasm32-unknown-unknown
@@ -452,7 +624,7 @@ pages_build:
 
 # https://k33g.gitlab.io/articles/2020-07-23-GITLAB-PAGES-EN.html
 # Deploy gitlab pages
-# The name of this job *must* be pages:, otherwise no deploymet happens D:
+# The name of this job *must* be pages:, otherwise no deployment happens D:
 pages:
     stage: deploy
     dependencies: [pages_build]
@@ -531,6 +703,7 @@ upload:
 
 vscode-prepare-publish:
   stage: test
+  extends: .individual-cache # TODO caching the wrong folder
   script:
     - cd surfer-vscode
     - apt update
