@@ -23,11 +23,11 @@ repository = "https://gitlab.com/surfer-project/surfer/"
 
 base64 = "0.22"
 bincode = "1.3.3"
-bytes = "1.10"
-bytesize = "2"
+bytes = "1.11"
+bytesize = "2.3.1"
 camino = { version = "1.1.6", features = ["serde1"] }
-clap = { version = "4.5.31", features = ['derive'] }
-config = { version = "0.15.8", default-features = false, features = ["toml"] }
+clap = { version = "4.5.53", features = ['derive'] }
+config = { version = "0.15.19", default-features = false, features = ["toml"] }
 derive_more = { version = "2.0", default-features = false, features = [
     "add",
     "add_assign",
@@ -93,7 +93,7 @@ tracing-wasm = "0.2.1"
 vergen-gitcl = "1.0"
 wasm-bindgen-futures = "0.4.50"
 web-time = "1.1.0"
-wellen = { version = "0.19", features = ["serde1"] }
+wellen = { version = "0.19.1", features = ["serde1"] }
 
 [profile.release]
 opt-level = 3 # fast and small wasm
