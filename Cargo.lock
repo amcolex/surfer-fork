@@ -2992,6 +2992,7 @@ dependencies = [
  "enum-iterator",
  "epaint",
  "extism",
+ "extism-convert",
  "extism-manifest",
  "eyre",
  "f128",
