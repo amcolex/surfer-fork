@@ -976,6 +976,7 @@ impl SystemState {
             | VariableInfo::Bits
             | VariableInfo::Clock
             | VariableInfo::String
+            | VariableInfo::Event
             | VariableInfo::Real => {
                 let label = ui
                     .with_layout(Layout::top_down(alignment).with_cross_justify(true), |ui| {
