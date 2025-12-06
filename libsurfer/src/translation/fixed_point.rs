@@ -1,4 +1,4 @@
-use num::{BigUint, One, Zero};
+use num::{BigUint, One, ToPrimitive, Zero};
 use std::cmp::Ordering;
 use std::ops::BitAnd;
 
@@ -22,13 +22,20 @@ pub(crate) fn big_uint_to_ufixed(uint: &BigUint, lg_scaling_factor: i64) -> Stri
             if remainder.is_zero() {
                 integer_part.to_string() // No fractional part
             } else {
-                let mut fractional_part = String::new();
+                let mut fractional_part = String::with_capacity(lg_scaling_factor as usize);
 
                 // Scale up the remainder to extract fractional digits
                 for _ in 0..lg_scaling_factor {
                     remainder *= 10_u32;
                     let digit = &remainder >> lg_scaling_factor;
-                    fractional_part.push_str(&digit.to_string());
+
+                    // Optimize single-digit conversion
+                    if let Some(d) = digit.to_u8() {
+                        fractional_part.push((b'0' + d) as char);
+                    } else {
+                        fractional_part.push_str(&digit.to_string());
+                    }
+
                     remainder &= &mask;
 
                     // Stop if the scaled remainder becomes zero
@@ -50,7 +57,7 @@ pub(crate) fn big_uint_to_ufixed(uint: &BigUint, lg_scaling_factor: i64) -> Stri
 /// where `as_signed()` interprets the `uint` as a signed value using two's complement.
 pub(crate) fn big_uint_to_sfixed(uint: &BigUint, num_bits: u64, lg_scaling_factor: i64) -> String {
     if num_bits == 0 {
-        return "".to_string();
+        return String::new();
     }
     if uint.bit(num_bits - 1) {
         let inverted_uint = (BigUint::one() << num_bits) - uint;
