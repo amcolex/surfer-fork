@@ -1,5 +1,6 @@
 use crate::message::Message;
 use crate::translation::fixed_point::{big_uint_to_sfixed, big_uint_to_ufixed};
+use crate::translation::floating_point::big_uint_to_float;
 use crate::wave_container::{ScopeId, VarId};
 use eyre::Result;
 use half::{bf16, f16};
@@ -31,6 +32,9 @@ pub static UNSIGNED_INTEGER_TYPE_NAMES: &[&str] = &["unresolved_unsigned", "unsi
 
 /// Type names that should default to unsigned fixed-point conversion
 pub static UNSIGNED_FIXEDPOINT_TYPE_NAMES: &[&str] = &["unresolved_ufixed", "ufixed"];
+
+/// Type names that should default to floating-point conversion
+pub static FLOATINGPOINT_TYPE_NAMES: &[&str] = &["unresolved_float", "float"];
 
 fn match_variable_type_name(
     variable_type_name: &Option<String>,
@@ -512,6 +516,54 @@ impl Translator<VarId, ScopeId, Message> for SignedFixedPointTranslator {
             Ok(TranslationPreference::Prefer)
         } else {
             translates_all_bit_types(variable)
+        }
+    }
+}
+
+pub struct GenericFloatingPointTranslator;
+
+impl Translator<VarId, ScopeId, Message> for GenericFloatingPointTranslator {
+    fn name(&self) -> String {
+        "FP: Generic".into()
+    }
+
+    fn translate(
+        &self,
+        variable: &VariableMeta<VarId, ScopeId>,
+        value: &VariableValue,
+    ) -> Result<TranslationResult> {
+        let (string, value_kind) = if let Some(idx) = &variable.index {
+            translate_numeric(
+                |v| big_uint_to_float(&v, variable.num_bits.unwrap_or(0) as u64, -idx.lsb),
+                value,
+            )
+        } else {
+            translate_numeric(|_| "No mantissa bits".to_string(), value)
+        };
+        Ok(TranslationResult {
+            kind: value_kind,
+            val: ValueRepr::String(string),
+            subfields: vec![],
+        })
+    }
+
+    fn variable_info(&self, _: &VariableMeta<VarId, ScopeId>) -> Result<VariableInfo> {
+        Ok(VariableInfo::Bits)
+    }
+
+    fn translates(&self, variable: &VariableMeta<VarId, ScopeId>) -> Result<TranslationPreference> {
+        if match_variable_type_name(&variable.variable_type_name, FLOATINGPOINT_TYPE_NAMES) {
+            Ok(TranslationPreference::Prefer)
+        } else {
+            if let Some(idx) = &variable.index {
+                if idx.lsb < 0 {
+                    Ok(TranslationPreference::Yes)
+                } else {
+                    Ok(TranslationPreference::No)
+                }
+            } else {
+                Ok(TranslationPreference::No)
+            }
         }
     }
 }

@@ -14,6 +14,7 @@ mod basic_translators;
 pub mod clock;
 mod enum_translator;
 mod fixed_point;
+mod floating_point;
 mod instruction_translators;
 pub mod numeric_translators;
 #[cfg(feature = "python")]
