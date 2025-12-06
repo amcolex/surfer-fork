@@ -77,6 +77,7 @@ pub struct DrawnRegion {
 pub struct DrawingCommands {
     is_bool: bool,
     is_clock: bool,
+    is_event: bool,
     values: Vec<(f32, DrawnRegion)>,
 }
 
@@ -85,6 +86,16 @@ impl DrawingCommands {
         Self {
             values: vec![],
             is_bool: true,
+            is_event: false,
+            is_clock: false,
+        }
+    }
+
+    pub fn new_event() -> Self {
+        Self {
+            values: vec![],
+            is_bool: true,
+            is_event: true,
             is_clock: false,
         }
     }
@@ -93,6 +104,7 @@ impl DrawingCommands {
         Self {
             values: vec![],
             is_bool: true,
+            is_event: false,
             is_clock: true,
         }
     }
@@ -101,6 +113,7 @@ impl DrawingCommands {
         Self {
             values: vec![],
             is_bool: false,
+            is_event: false,
             is_clock: false,
         }
     }
@@ -245,6 +258,7 @@ fn variable_draw_commands(
                 match info.get_subinfo(&names) {
                     VariableInfo::Bool => DrawingCommands::new_bool(),
                     VariableInfo::Clock => DrawingCommands::new_clock(),
+                    VariableInfo::Event => DrawingCommands::new_event(),
                     _ => DrawingCommands::new_wide(),
                 }
             });
@@ -964,16 +978,26 @@ impl SystemState {
                         for (old, new) in commands.values.iter().zip(commands.values.iter().skip(1))
                         {
                             if commands.is_bool {
-                                self.draw_bool_transition(
-                                    (old, new),
-                                    new.1.force_anti_alias,
-                                    color,
-                                    y_offset,
-                                    height_scaling_factor,
-                                    commands.is_clock && draw_clock_rising_marker,
-                                    self.fill_high_values(),
-                                    ctx,
-                                );
+                                if commands.is_event {
+                                    self.draw_bool_event(
+                                        (old, new),
+                                        color,
+                                        y_offset,
+                                        height_scaling_factor,
+                                        ctx,
+                                    );
+                                } else {
+                                    self.draw_bool_transition(
+                                        (old, new),
+                                        new.1.force_anti_alias,
+                                        color,
+                                        y_offset,
+                                        height_scaling_factor,
+                                        commands.is_clock && draw_clock_rising_marker,
+                                        self.fill_high_values(),
+                                        ctx,
+                                    );
+                                }
                             } else {
                                 self.draw_region(
                                     (old, new),
@@ -1392,6 +1416,56 @@ impl SystemState {
                     stroke,
                 ));
             }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_bool_event(
+        &self,
+        ((old_x, prev_region), (new_x, new_region)): (&(f32, DrawnRegion), &(f32, DrawnRegion)),
+        color: Color32,
+        offset: f32,
+        height_scaling_factor: f32,
+        ctx: &mut DrawingContext,
+    ) {
+        if let (Some(_prev_result), Some(_new_result)) = (&prev_region.inner, &new_region.inner) {
+            let trace_coords =
+                |x, y| (ctx.to_screen)(x, y * ctx.cfg.line_height * height_scaling_factor + offset);
+
+            let stroke = Stroke {
+                color,
+                width: self.user.config.theme.linewidth,
+            };
+
+            ctx.painter.add(PathShape::line(
+                vec![trace_coords(*old_x, 0.0), trace_coords(*old_x, 1.0)],
+                stroke,
+            ));
+
+            ctx.painter.add(PathShape::convex_polygon(
+                vec![
+                    trace_coords(*old_x - 2.5, 0.2),
+                    trace_coords(*old_x, 0.),
+                    trace_coords(*old_x + 2.5, 0.2),
+                ],
+                color,
+                stroke,
+            ));
+
+            ctx.painter.add(PathShape::line(
+                vec![trace_coords(*new_x, 0.0), trace_coords(*new_x, 1.0)],
+                stroke,
+            ));
+
+            ctx.painter.add(PathShape::convex_polygon(
+                vec![
+                    trace_coords(*new_x - 2.5, 0.2),
+                    trace_coords(*new_x, 0.),
+                    trace_coords(*new_x + 2.5, 0.2),
+                ],
+                color,
+                stroke,
+            ));
         }
     }
 

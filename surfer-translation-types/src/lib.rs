@@ -153,6 +153,7 @@ pub enum VariableInfo {
     #[default]
     String,
     Real,
+    Event,
 }
 
 #[derive(Debug, Display, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
