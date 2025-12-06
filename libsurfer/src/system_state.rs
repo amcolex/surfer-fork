@@ -118,6 +118,10 @@ impl SystemState {
 
         // Basic translators that we can load quickly
         let translators = all_translators();
+        let wanted_timeunit = match config.preferred_time_unit() {
+            TimeUnit::Auto => None,
+            others => Some(others),
+        };
 
         let result = SystemState {
             user: UserState {
@@ -133,7 +137,7 @@ impl SystemState {
                 show_license: false,
                 show_logs: false,
                 show_cursor_window: false,
-                wanted_timeunit: TimeUnit::None,
+                wanted_timeunit,
                 time_string_format: None,
                 show_url_entry: false,
                 show_quick_start: false,
