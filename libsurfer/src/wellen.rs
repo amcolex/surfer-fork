@@ -372,7 +372,7 @@ impl WellenContainer {
             VarId::Wellen(id) => Ok(id),
             VarId::None => {
                 let h = &self.hierarchy;
-                let var = match h.lookup_var(r.path.strs(), &r.name) {
+                let var = match h.lookup_var(r.path.strs(), r.name.clone()) {
                     None => bail!("Failed to find variable: {r:?}"),
                     Some(id) => id,
                 };
@@ -600,6 +600,7 @@ impl WellenContainer {
             SignalEncoding::String => VariableEncoding::String,
             SignalEncoding::Real => VariableEncoding::Real,
             SignalEncoding::BitVector(_) => VariableEncoding::BitVector,
+            SignalEncoding::Event => VariableEncoding::Event,
         };
         Ok(VariableMeta {
             var: variable.clone(),
@@ -659,6 +660,7 @@ fn convert_variable_value(value: wellen::SignalValue) -> VariableValue {
         }
         wellen::SignalValue::String(value) => VariableValue::String(value.to_string()),
         wellen::SignalValue::Real(value) => VariableValue::String(format!("{value}")),
+        wellen::SignalValue::Event => VariableValue::String("Event".to_string()),
     }
 }
 
