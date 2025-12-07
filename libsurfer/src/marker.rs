@@ -326,7 +326,7 @@ impl SystemState {
                                         let diff = time_string(
                                             &(*row_marker_time - *col_marker_time),
                                             &waves.inner.metadata().timescale,
-                                            &self.user.wanted_timeunit,
+                                            &self.wanted_time_unit(),
                                             &self.get_time_format(),
                                         );
                                         row.col(|ui| {
@@ -387,7 +387,7 @@ impl SystemState {
                     .get(&drawing_info.idx)
                     .unwrap_or(&BigInt::from(0)),
                 &waves.inner.metadata().timescale,
-                &self.user.wanted_timeunit,
+                &self.wanted_time_unit(),
                 &self.get_time_format(),
             );
 

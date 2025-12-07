@@ -666,7 +666,7 @@ impl SystemState {
                 }
             }
             Message::SetTimeUnit(timeunit) => {
-                self.user.wanted_timeunit = timeunit;
+                self.user.wanted_timeunit = Some(timeunit);
                 self.invalidate_draw_commands();
             }
             Message::SetTimeStringFormatting(format) => {
