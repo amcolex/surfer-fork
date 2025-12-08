@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use camino::Utf8PathBuf;
 use directories::ProjectDirs;
-use extism_convert;
 use extism::{Manifest, PTR, Plugin, PluginBuilder, Wasm, host_fn};
+use extism_convert;
 use extism_manifest::MemoryOptions;
 use eyre::{Context, anyhow};
 use surfer_translation_types::plugin_types::TranslateParams;
