@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use surver::SurverStatus;
 
 use crate::async_util::AsyncJob;
-use crate::config::PrimaryMouseDrag;
+use crate::config::{PrimaryMouseDrag, TransitionValue};
 use crate::displayed_item_tree::{ItemIndex, VisibleItemIndex};
 use crate::graphics::{Graphic, GraphicId};
 use crate::hierarchy::ParameterDisplayLocation;
@@ -260,6 +260,7 @@ pub enum Message {
     SetTickLines(bool),
     SetVariableTooltip(bool),
     SetScopeTooltip(bool),
+    SetTransitionValue(TransitionValue),
     ToggleFullscreen,
     StopProgressTracker,
     /// Set which time unit to use.
