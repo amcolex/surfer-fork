@@ -172,6 +172,7 @@ impl SystemState {
                 autoreload_files: None,
                 animation_enabled: None,
                 use_dinotrace_style: None,
+                transition_value: None,
             },
             translators,
             channels,
