@@ -95,7 +95,7 @@ tracing-wasm = "0.2.1"
 vergen-gitcl = "1.0"
 wasm-bindgen-futures = "0.4.50"
 web-time = "1.1.0"
-wellen = { version = "0.19.2", features = ["serde1"] }
+wellen = { version = "0.20.0", features = ["serde1"] }
 
 [profile.release]
 opt-level = 3 # fast and small wasm
