@@ -35,7 +35,7 @@ async fn server_end_to_end_basic() {
             port,
             "127.0.0.1".to_string(),
             Some(token_clone),
-            file.to_string_lossy().to_string(),
+            &[file.to_string_lossy().to_string()],
             Some(started_clone),
         )
         .await
@@ -95,7 +95,8 @@ async fn server_end_to_end_basic() {
     );
     let body = resp.text().await.unwrap();
     let status = serde_json::from_str::<surver::SurverStatus>(&body).unwrap();
-    assert!(status.bytes >= status.bytes_loaded);
+    let file_info = &status.file_infos[0];
+    assert!(file_info.bytes >= file_info.bytes_loaded);
 
     // 4) Hierarchy endpoint (lz4-compressed bincode), just check non-empty
     let resp = client

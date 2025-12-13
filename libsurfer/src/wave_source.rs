@@ -28,7 +28,7 @@ use crate::wellen::{
 };
 use crate::{SystemState, message::Message};
 use surver::{
-    HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SurverStatus, WELLEN_SURFER_DEFAULT_OPTIONS,
+    HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SurverFileInfo, WELLEN_SURFER_DEFAULT_OPTIONS,
 };
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
@@ -469,7 +469,7 @@ impl SystemState {
     }
 
     /// uses the server status in order to display a loading bar
-    pub fn server_status_to_progress(&mut self, server: String, status: SurverStatus) {
+    pub fn server_status_to_progress(&mut self, server: String, file_info: &SurverFileInfo) {
         // once the body is loaded, we are no longer interested in the status
         let body_loaded = self
             .user
@@ -482,8 +482,8 @@ impl SystemState {
             let sender = self.channels.msg_sender.clone();
             self.progress_tracker = Some(LoadProgress::new(LoadProgressStatus::ReadingBody(
                 source,
-                status.bytes,
-                Arc::new(AtomicU64::new(status.bytes_loaded)),
+                file_info.bytes,
+                Arc::new(AtomicU64::new(file_info.bytes_loaded)),
             )));
             // get another status update
             get_server_status(sender, server, 250);

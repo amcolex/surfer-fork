@@ -1038,7 +1038,7 @@ impl SystemState {
             }
             Message::SetupCxxrtl(kind) => self.connect_to_cxxrtl(kind, false),
             Message::SurferServerStatus(_start, server, status) => {
-                self.server_status_to_progress(server, status);
+                self.server_status_to_progress(server, &status.file_infos[0]);
             }
             Message::FileDropped(dropped_file) => {
                 self.load_from_dropped(dropped_file)
