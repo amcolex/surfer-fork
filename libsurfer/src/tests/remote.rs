@@ -26,7 +26,7 @@ fn start_server(bind_address: &str, port: u16, token: &str, filename: &str) -> S
             port,
             bind_address.to_string(),
             token,
-            filename,
+            &[filename],
             Some(started_copy),
         ));
     });

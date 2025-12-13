@@ -48,7 +48,7 @@ async fn server_reload_with_overwrite() {
             port,
             "127.0.0.1".to_string(),
             Some(token_clone),
-            dest_clone.to_string_lossy().to_string(),
+            &[dest_clone.to_string_lossy().to_string()],
             Some(started_clone),
         )
         .await
@@ -83,7 +83,7 @@ async fn server_reload_with_overwrite() {
         assert_eq!(st_resp.status(), StatusCode::OK);
         let st_body = st_resp.bytes().await.unwrap();
         let st: surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
-        if st.last_load_ok {
+        if st.file_infos[0].last_load_ok {
             initial_loaded = true;
             break;
         }
@@ -125,7 +125,7 @@ async fn server_reload_with_overwrite() {
         assert_eq!(st_resp.status(), StatusCode::OK);
         let st_body = st_resp.bytes().await.unwrap();
         let st: surver::SurverStatus = serde_json::from_slice(&st_body).unwrap();
-        if !st.reloading && st.last_load_ok {
+        if !st.file_infos[0].reloading && st.file_infos[0].last_load_ok {
             reload_complete = true;
             break;
         }
