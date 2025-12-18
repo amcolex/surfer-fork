@@ -7,6 +7,7 @@ use ftr_parser::types::Transaction;
 use num::BigInt;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::sync::Arc;
 use surver::SurverStatus;
 
 use crate::async_util::AsyncJob;
@@ -32,7 +33,7 @@ use crate::{
     time::{TimeStringFormatting, TimeUnit},
     variable_filter::VariableIOFilterType,
     variable_name_type::VariableNameType,
-    wave_container::{ScopeRef, VariableRef, WaveContainer},
+    wave_container::{AnalogCacheKey, ScopeRef, VariableRef, WaveContainer},
     wave_source::{CxxrtlKind, LoadOptions, WaveFormat},
     wellen::{BodyResult, HeaderResult, LoadSignalsResult},
 };
@@ -191,7 +192,7 @@ pub enum Message {
     #[serde(skip)]
     Error(eyre::Error),
     #[serde(skip)]
-    TranslatorLoaded(#[debug(skip)] Box<DynTranslator>),
+    TranslatorLoaded(#[debug(skip)] Arc<DynTranslator>),
     /// Take note that the specified translator errored on a `translates` call on the
     /// specified variable
     BlacklistTranslator(VariableRef, String),
@@ -363,6 +364,21 @@ pub enum Message {
     ExpandDrawnItem {
         item: DisplayedItemRef,
         levels: usize,
+    },
+    SetAnalogSettings(
+        MessageTarget<VisibleItemIndex>,
+        Option<crate::displayed_item::AnalogSettings>,
+    ),
+    BuildAnalogCache {
+        display_id: DisplayedItemRef,
+        cache_key: AnalogCacheKey,
+    },
+    #[serde(skip)]
+    AnalogCacheBuilt {
+        #[debug(skip)]
+        entry: Arc<crate::analog_signal_cache::AnalogCacheEntry>,
+        #[debug(skip)]
+        result: Result<crate::analog_signal_cache::AnalogSignalCache, String>,
     },
 
     SetViewportStrategy(ViewportStrategy),

@@ -18,10 +18,13 @@ use surfer_translation_types::{
 use tracing::{error, warn};
 
 use crate::CachedDrawData::TransactionDrawData;
+use crate::analog_renderer::AnalogDrawingCommand;
 use crate::clock_highlighting::draw_clock_edge_marks;
 use crate::config::SurferTheme;
 use crate::data_container::DataContainer;
-use crate::displayed_item::{DisplayedFieldRef, DisplayedItemRef, DisplayedVariable};
+use crate::displayed_item::{
+    AnalogSettings, DisplayedFieldRef, DisplayedItemRef, DisplayedVariable,
+};
 use crate::time::get_ticks;
 use crate::tooltips::handle_transaction_tooltip;
 use crate::transaction_container::{TransactionRef, TransactionStreamRef};
@@ -64,7 +67,7 @@ impl DinotraceDrawingStyle {
     }
 }
 pub struct DrawnRegion {
-    inner: Option<TranslatedValue>,
+    pub inner: Option<TranslatedValue>,
     /// True if a transition should be drawn even if there is no change in the value
     /// between the previous and next pixels. Only used by the bool drawing logic to
     /// draw draw a vertical line and prevent apparent aliasing
@@ -72,42 +75,36 @@ pub struct DrawnRegion {
     dinotrace_style: DinotraceDrawingStyle,
 }
 
-/// List of values to draw for a variable. It is an ordered list of values that should
-/// be drawn at the *start time* until the *start time* of the next value
-pub struct DrawingCommands {
-    is_bool: bool,
-    is_clock: bool,
-    values: Vec<(f32, DrawnRegion)>,
+pub enum DrawingCommands {
+    Digital(DigitalDrawingCommands),
+    Analog(AnalogDrawingCommands),
 }
 
-impl DrawingCommands {
-    pub fn new_bool() -> Self {
-        Self {
-            values: vec![],
-            is_bool: true,
-            is_clock: false,
-        }
-    }
+pub struct DigitalDrawingCommands {
+    pub is_bool: bool,
+    pub is_clock: bool,
+    pub values: Vec<(f32, DrawnRegion)>,
+}
 
-    pub fn new_clock() -> Self {
-        Self {
-            values: vec![],
-            is_bool: true,
-            is_clock: true,
-        }
-    }
-
-    pub fn new_wide() -> Self {
-        Self {
-            values: vec![],
-            is_bool: false,
-            is_clock: false,
-        }
-    }
-
-    pub fn push(&mut self, val: (f32, DrawnRegion)) {
-        self.values.push(val);
-    }
+pub enum AnalogDrawingCommands {
+    /// Cache is still being built
+    Loading,
+    /// Cache is ready with drawing data
+    Ready {
+        /// Viewport min/max for the visible signal range (used for Y-axis scaling)
+        viewport_min: f64,
+        viewport_max: f64,
+        /// Global min/max across entire signal (used for global Y-axis scaling)
+        global_min: f64,
+        global_max: f64,
+        /// Per-pixel drawing commands with flat spans and ranges
+        values: Vec<AnalogDrawingCommand>,
+        /// Pixel position of timestamp 0 (start of signal data).
+        min_valid_pixel: f32,
+        /// Pixel position of last timestamp (end of signal data).
+        max_valid_pixel: f32,
+        analog_settings: AnalogSettings,
+    },
 }
 
 pub struct TxDrawingCommands {
@@ -116,13 +113,15 @@ pub struct TxDrawingCommands {
     gen_ref: TransactionStreamRef, // makes it easier to later access the actual Transaction object
 }
 
-struct VariableDrawCommands {
-    clock_edges: Vec<f32>,
-    display_id: DisplayedItemRef,
-    local_commands: HashMap<Vec<String>, DrawingCommands>,
-    local_msgs: Vec<Message>,
+pub(crate) struct VariableDrawCommands {
+    pub(crate) clock_edges: Vec<f32>,
+    pub(crate) display_id: DisplayedItemRef,
+    pub(crate) local_commands: HashMap<Vec<String>, DrawingCommands>,
+    pub(crate) local_msgs: Vec<Message>,
 }
 
+/// Common setup for variable draw commands: extracts metadata and determines rendering mode.
+/// Routes to either analog or digital command generation.
 #[allow(clippy::too_many_arguments)]
 fn variable_draw_commands(
     displayed_variable: &DisplayedVariable,
@@ -134,11 +133,14 @@ fn variable_draw_commands(
     viewport_idx: usize,
     use_dinotrace_style: bool,
 ) -> Option<VariableDrawCommands> {
-    let mut clock_edges = vec![];
-    let mut local_msgs = vec![];
-
-    // Extract wave_container once to avoid repeated as_waves().unwrap() calls
     let wave_container = waves.inner.as_waves()?;
+
+    let signal_id = wave_container
+        .signal_id(&displayed_variable.variable_ref)
+        .ok()?;
+    if !wave_container.is_signal_loaded(&signal_id) {
+        return None;
+    }
 
     let meta = match wave_container
         .variable_meta(&displayed_variable.variable_ref)
@@ -153,11 +155,60 @@ fn variable_draw_commands(
 
     let displayed_field_ref: DisplayedFieldRef = display_id.into();
     let translator = waves.variable_translator(&displayed_field_ref, translators);
-    // we need to get the variable info here to get the correct info for aliases
     let info = translator.variable_info(&meta).unwrap();
+
+    let is_analog_mode = displayed_variable.analog.is_some();
+    let is_bool = matches!(info, VariableInfo::Bool | VariableInfo::Clock);
+
+    if is_analog_mode && !is_bool {
+        return crate::analog_renderer::variable_analog_draw_commands(
+            displayed_variable,
+            display_id,
+            waves,
+            translators,
+            view_width,
+            viewport_idx,
+        );
+    }
+
+    variable_digital_draw_commands(
+        displayed_variable,
+        display_id,
+        timestamps,
+        waves,
+        translators,
+        wave_container,
+        &meta,
+        translator,
+        &info,
+        view_width,
+        viewport_idx,
+        use_dinotrace_style,
+    )
+}
+
+/// Generate draw commands for digital waveform rendering.
+#[allow(clippy::too_many_arguments)]
+fn variable_digital_draw_commands(
+    displayed_variable: &DisplayedVariable,
+    display_id: DisplayedItemRef,
+    timestamps: &[(f32, num::BigUint)],
+    waves: &WaveData,
+    translators: &TranslatorList,
+    wave_container: &crate::wave_container::WaveContainer,
+    meta: &crate::wave_container::VariableMeta,
+    translator: &crate::translation::DynTranslator,
+    info: &VariableInfo,
+    view_width: f32,
+    viewport_idx: usize,
+    use_dinotrace_style: bool,
+) -> Option<VariableDrawCommands> {
+    let mut clock_edges = vec![];
+    let mut local_msgs = vec![];
+    let displayed_field_ref: DisplayedFieldRef = display_id.into();
     let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
 
-    let mut local_commands: HashMap<Vec<_>, _> = HashMap::new();
+    let mut local_commands: HashMap<Vec<String>, DigitalDrawingCommands> = HashMap::new();
 
     let mut prev_values = HashMap::new();
 
@@ -214,7 +265,7 @@ fn variable_draw_commands(
             continue;
         }
 
-        let translation_result = match translator.translate(&meta, &val) {
+        let translation_result = match translator.translate(meta, &val) {
             Ok(result) => result,
             Err(e) => {
                 error!(
@@ -242,10 +293,11 @@ fn variable_draw_commands(
 
         for SubFieldFlatTranslationResult { names, value } in fields {
             let entry = local_commands.entry(names.clone()).or_insert_with(|| {
-                match info.get_subinfo(&names) {
-                    VariableInfo::Bool => DrawingCommands::new_bool(),
-                    VariableInfo::Clock => DrawingCommands::new_clock(),
-                    _ => DrawingCommands::new_wide(),
+                let subinfo = info.get_subinfo(&names);
+                DigitalDrawingCommands {
+                    is_bool: matches!(subinfo, VariableInfo::Bool | VariableInfo::Clock),
+                    is_clock: matches!(subinfo, VariableInfo::Clock),
+                    values: vec![],
                 }
             });
 
@@ -280,7 +332,7 @@ fn variable_draw_commands(
                     }
                 }
 
-                entry.push((
+                entry.values.push((
                     *pixel,
                     DrawnRegion {
                         inner: value,
@@ -294,7 +346,10 @@ fn variable_draw_commands(
     Some(VariableDrawCommands {
         clock_edges,
         display_id,
-        local_commands,
+        local_commands: local_commands
+            .into_iter()
+            .map(|(k, v)| (k, DrawingCommands::Digital(v)))
+            .collect(),
         local_msgs,
     })
 }
@@ -415,6 +470,7 @@ impl SystemState {
             }
             clock_edges.append(&mut new_clock_edges);
         }
+
         let ticks = get_ticks(
             &waves.viewports[viewport_idx],
             &waves.inner.metadata().timescale,
@@ -793,7 +849,7 @@ impl SystemState {
 
         match &self.draw_data.borrow()[viewport_idx] {
             Some(CachedDrawData::WaveDrawData(draw_data)) => {
-                self.draw_wave_data(waves, draw_data, &mut ctx);
+                self.draw_wave_data(waves, draw_data, frame_width, &mut ctx);
             }
             Some(CachedDrawData::TransactionDrawData(draw_data)) => {
                 self.draw_transaction_data(
@@ -881,6 +937,7 @@ impl SystemState {
         &self,
         waves: &WaveData,
         draw_data: &CachedWaveDrawData,
+        frame_width: f32,
         ctx: &mut DrawingContext,
     ) {
         let clock_edges = &draw_data.clock_edges;
@@ -961,27 +1018,44 @@ impl SystemState {
                                 &self.user.config.theme.variable_default
                             }
                         });
-                        for (old, new) in commands.values.iter().zip(commands.values.iter().skip(1))
-                        {
-                            if commands.is_bool {
-                                self.draw_bool_transition(
-                                    (old, new),
-                                    new.1.force_anti_alias,
+                        match commands {
+                            DrawingCommands::Digital(digital_commands) => {
+                                for (old, new) in digital_commands
+                                    .values
+                                    .iter()
+                                    .zip(digital_commands.values.iter().skip(1))
+                                {
+                                    if digital_commands.is_bool {
+                                        self.draw_bool_transition(
+                                            (old, new),
+                                            new.1.force_anti_alias,
+                                            color,
+                                            y_offset,
+                                            height_scaling_factor,
+                                            digital_commands.is_clock && draw_clock_rising_marker,
+                                            self.fill_high_values(),
+                                            ctx,
+                                        );
+                                    } else {
+                                        self.draw_region(
+                                            (old, new),
+                                            color,
+                                            y_offset,
+                                            height_scaling_factor,
+                                            ctx,
+                                            *text_color,
+                                        );
+                                    }
+                                }
+                            }
+                            DrawingCommands::Analog(analog_commands) => {
+                                crate::analog_renderer::draw_analog(
+                                    analog_commands,
                                     color,
                                     y_offset,
                                     height_scaling_factor,
-                                    commands.is_clock && draw_clock_rising_marker,
-                                    self.fill_high_values(),
+                                    frame_width,
                                     ctx,
-                                );
-                            } else {
-                                self.draw_region(
-                                    (old, new),
-                                    color,
-                                    y_offset,
-                                    height_scaling_factor,
-                                    ctx,
-                                    *text_color,
                                 );
                             }
                         }

@@ -1,5 +1,7 @@
 #![deny(unused_crate_dependencies)]
 
+pub mod analog_renderer;
+pub mod analog_signal_cache;
 pub mod async_util;
 pub mod batch_commands;
 #[cfg(feature = "performance_plot")]
@@ -102,7 +104,9 @@ use wcp::{proto::WcpCSMessage, proto::WcpEvent, proto::WcpSCMessage};
 use crate::async_util::perform_work;
 use crate::config::{SurferConfig, SurferTheme};
 use crate::dialog::{OpenSiblingStateFileDialog, ReloadWaveformDialog};
-use crate::displayed_item::{DisplayedFieldRef, DisplayedItem, DisplayedItemRef, FieldFormat};
+use crate::displayed_item::{
+    AnalogVarState, DisplayedFieldRef, DisplayedItem, DisplayedItemRef, FieldFormat,
+};
 use crate::displayed_item_tree::VisibleItemIndex;
 use crate::drawing_canvas::TxDrawingCommands;
 use crate::message::Message;
@@ -875,6 +879,47 @@ impl SystemState {
                     .entry(node.item_ref)
                     .and_modify(|item| item.set_height_scaling_factor(scale));
             }
+            Message::SetAnalogSettings(vidx, new_settings) => {
+                self.save_current_canvas("Set analog state".into());
+                self.invalidate_draw_commands();
+                let waves = self.user.waves.as_mut()?;
+
+                // Update settings while preserving existing cache
+                let update = |item: &mut DisplayedItem| {
+                    if let DisplayedItem::Variable(var) = item {
+                        match (&mut var.analog, new_settings) {
+                            (Some(s), Some(new)) => s.settings = new,
+                            (None, Some(new)) => var.analog = Some(AnalogVarState::new(new)),
+                            (_, None) => var.analog = None,
+                        }
+                    }
+                };
+
+                match vidx {
+                    MessageTarget::Explicit(vidx) => {
+                        let node = waves.items_tree.get_visible(vidx)?;
+                        waves
+                            .displayed_items
+                            .entry(node.item_ref)
+                            .and_modify(update);
+                    }
+                    MessageTarget::CurrentSelection => {
+                        if let Some(focused) = waves.focused_item {
+                            let node = waves.items_tree.get_visible(focused)?;
+                            waves
+                                .displayed_items
+                                .entry(node.item_ref)
+                                .and_modify(update);
+                        }
+                        for node in waves.items_tree.iter_visible_selected() {
+                            waves
+                                .displayed_items
+                                .entry(node.item_ref)
+                                .and_modify(update);
+                        }
+                    }
+                }
+            }
             Message::MoveCursorToTransition {
                 next,
                 variable,
@@ -1017,7 +1062,7 @@ impl SystemState {
                 perform_work(
                     move || match PluginTranslator::new(path.into_std_path_buf()) {
                         Ok(t) => {
-                            if let Err(e) = sender.send(Message::TranslatorLoaded(Box::new(t))) {
+                            if let Err(e) = sender.send(Message::TranslatorLoaded(Arc::new(t))) {
                                 error!("Failed to send message: {e}");
                             }
                         }
@@ -1933,6 +1978,107 @@ impl SystemState {
                     }
                     self.channels.wcp_s2c_sender = Some(WCP_SC_HANDLER.tx.clone());
                 }
+            }
+            Message::BuildAnalogCache {
+                display_id,
+                cache_key,
+            } => {
+                let waves = self.user.waves.as_mut()?;
+                let generation = waves.cache_generation;
+
+                // Check if already have valid entry (building or ready)
+                let item = waves.displayed_items.get(&display_id)?;
+                let var = match item {
+                    DisplayedItem::Variable(v) => v,
+                    _ => return None,
+                };
+                if var
+                    .analog
+                    .as_ref()?
+                    .cache
+                    .as_ref()
+                    .is_some_and(|e| e.generation == generation && e.cache_key == cache_key)
+                {
+                    return None;
+                }
+
+                // Try to share from in-flight builds first (handles removed-but-still-building case)
+                if let Some(entry) = waves.inflight_caches.get(&cache_key)
+                    && entry.generation == generation
+                {
+                    if let DisplayedItem::Variable(var) =
+                        waves.displayed_items.get_mut(&display_id)?
+                    {
+                        var.analog.as_mut()?.cache = Some(entry.clone());
+                    }
+                    return None; // Shared from in-flight build
+                }
+
+                // Try to share from another displayed variable (O(n) scan - only during cache build)
+                let existing = waves
+                    .displayed_items
+                    .values()
+                    .filter_map(|item| match item {
+                        DisplayedItem::Variable(v) => v.analog.as_ref()?.cache.as_ref(),
+                        _ => None,
+                    })
+                    .find(|e| e.cache_key == cache_key && e.generation == generation)
+                    .cloned();
+
+                if let Some(entry) = existing {
+                    if let DisplayedItem::Variable(var) =
+                        waves.displayed_items.get_mut(&display_id)?
+                    {
+                        var.analog.as_mut()?.cache = Some(entry);
+                    }
+                    return None; // Shared existing entry (may still be building)
+                }
+
+                // Clone variable_ref only when we need to spawn builder
+                let variable_ref = match waves.displayed_items.get(&display_id)? {
+                    DisplayedItem::Variable(v) => v.variable_ref.clone(),
+                    _ => return None,
+                };
+
+                // Create new entry and spawn builder
+                let entry = std::sync::Arc::new(crate::analog_signal_cache::AnalogCacheEntry::new(
+                    cache_key.clone(),
+                    generation,
+                ));
+
+                if let DisplayedItem::Variable(var) = waves.displayed_items.get_mut(&display_id)? {
+                    var.analog.as_mut()?.cache = Some(entry.clone());
+                }
+
+                let translator = self.translators.clone_translator(&cache_key.1);
+
+                // Track in-flight build for sharing with other variables
+                waves
+                    .inflight_caches
+                    .insert(cache_key.clone(), entry.clone());
+
+                waves.build_analog_cache_async(
+                    entry,
+                    &variable_ref,
+                    translator,
+                    &self.channels.msg_sender,
+                );
+            }
+            Message::AnalogCacheBuilt { entry, result } => {
+                OUTSTANDING_TRANSACTIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                // Remove from in-flight registry (may already be gone if generation changed)
+                if let Some(waves) = self.user.waves.as_mut() {
+                    waves.inflight_caches.remove(&entry.cache_key);
+                }
+                match result {
+                    Ok(cache) => {
+                        entry.set(cache);
+                    }
+                    Err(err) => {
+                        warn!("Failed to build analog cache: {err}");
+                    }
+                }
+                self.invalidate_draw_commands();
             }
             Message::Exit | Message::ToggleFullscreen => {} // Handled in eframe::update
             Message::AddViewport => {

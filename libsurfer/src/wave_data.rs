@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use eyre::{Result, WrapErr};
 use num::bigint::ToBigInt as _;
-use num::{BigInt, BigUint, Zero};
+use num::{BigInt, BigUint, ToPrimitive, Zero};
 use serde::{Deserialize, Serialize};
 use surfer_translation_types::{TranslationPreference, Translator, VariableValue};
 use tracing::{error, info, warn};
@@ -20,7 +20,9 @@ use crate::translation::{DynTranslator, TranslatorList, VariableInfoExt};
 use crate::variable_name_type::VariableNameType;
 use crate::view::ItemDrawingInfo;
 use crate::viewport::Viewport;
-use crate::wave_container::{ScopeRef, VariableMeta, VariableRef, VariableRefExt, WaveContainer};
+use crate::wave_container::{
+    AnalogCacheKey, ScopeRef, VariableMeta, VariableRef, VariableRefExt, WaveContainer,
+};
 use crate::wave_source::{WaveFormat, WaveSource};
 use crate::wellen::LoadSignalsCmd;
 use ftr_parser::types::Transaction;
@@ -74,9 +76,16 @@ pub struct WaveData {
     pub top_item_draw_offset: f32,
     #[serde(skip)]
     pub total_height: f32,
-    /// used by the `update_viewports` method after loading a new file
     #[serde(skip)]
     pub old_num_timestamps: Option<BigInt>,
+    /// Generation counter for analog cache invalidation on waveform reload.
+    #[serde(skip)]
+    pub cache_generation: u64,
+    /// Registry of in-flight analog cache builds for sharing.
+    /// Cleared on waveform reload when generation changes.
+    #[serde(skip)]
+    pub inflight_caches:
+        HashMap<AnalogCacheKey, std::sync::Arc<crate::analog_signal_cache::AnalogCacheEntry>>,
 }
 
 fn select_preferred_translator(var: &VariableMeta, translators: &TranslatorList) -> String {
@@ -194,6 +203,8 @@ impl WaveData {
             graphics: HashMap::new(),
             total_height: 0.,
             old_num_timestamps,
+            cache_generation: self.cache_generation + 1, // Invalidate all existing caches
+            inflight_caches: HashMap::new(),
         };
 
         new_wavedata.update_metadata(translators);
@@ -436,6 +447,7 @@ impl WaveData {
                 format: None,
                 field_formats: vec![],
                 height_scaling_factor: None,
+                analog: None,
             });
 
             indices.push(self.insert_item(new_variable, Some(target_position), true));
@@ -934,5 +946,52 @@ impl WaveData {
                     None
                 }
             })
+    }
+
+    /// Spawn async worker to build analog cache. Worker holds Arc clone.
+    pub fn build_analog_cache_async(
+        &self,
+        entry: std::sync::Arc<crate::analog_signal_cache::AnalogCacheEntry>,
+        variable_ref: &VariableRef,
+        translator: crate::translation::AnyTranslator,
+        sender: &std::sync::mpsc::Sender<crate::message::Message>,
+    ) -> Option<()> {
+        let wave_container = self.inner.as_waves()?;
+        let meta = wave_container.variable_meta(variable_ref).ok()?.clone();
+
+        let num_timestamps = self.num_timestamps()?.to_u64()?;
+
+        let accessor = wave_container.signal_accessor(entry.cache_key.0).ok()?;
+
+        let sender_clone = sender.clone();
+        crate::async_util::perform_work(move || {
+            let result = crate::analog_signal_cache::AnalogSignalCache::build(
+                accessor,
+                &translator,
+                &meta,
+                num_timestamps,
+                None,
+            );
+
+            let msg = match result {
+                Some(cache) => crate::message::Message::AnalogCacheBuilt {
+                    entry: entry.clone(),
+                    result: Ok(cache),
+                },
+                None => crate::message::Message::AnalogCacheBuilt {
+                    entry: entry.clone(),
+                    result: Err("Failed to build analog cache".into()),
+                },
+            };
+
+            crate::OUTSTANDING_TRANSACTIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = sender_clone.send(msg);
+
+            if let Some(ctx) = crate::EGUI_CONTEXT.read().unwrap().as_ref() {
+                ctx.request_repaint();
+            }
+        });
+
+        Some(())
     }
 }

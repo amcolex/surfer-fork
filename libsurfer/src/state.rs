@@ -257,6 +257,8 @@ impl SystemState {
                             display_item_ref_counter: 0,
                             old_num_timestamps: None,
                             graphics: HashMap::new(),
+                            cache_generation: 0,
+                            inflight_caches: HashMap::new(),
                         },
                         None,
                     ),
@@ -314,6 +316,8 @@ impl SystemState {
             display_item_ref_counter: 0,
             old_num_timestamps: None,
             graphics: HashMap::new(),
+            cache_generation: 0,
+            inflight_caches: HashMap::new(),
         };
 
         self.invalidate_draw_commands();
@@ -439,6 +443,14 @@ impl SystemState {
             .waves
             .as_ref()
             .is_some_and(|w| w.inner.is_fully_loaded())
+    }
+
+    /// Returns true if no analog caches are currently being built
+    pub fn analog_caches_ready(&self) -> bool {
+        self.user
+            .waves
+            .as_ref()
+            .is_none_or(|w| w.inflight_caches.is_empty())
     }
 
     /// Returns the current canvas state

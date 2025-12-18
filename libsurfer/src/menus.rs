@@ -564,6 +564,35 @@ impl SystemState {
                 msgs.push(Message::SetActiveScope(scope_type));
                 msgs.push(Message::ExpandScope(scope_path));
             }
+
+            if let DisplayedItem::Variable(variable) = displayed_item
+                && wave_container.supports_analog()
+            {
+                ui.menu_button("Analog", |ui| {
+                    use crate::displayed_item::AnalogSettings;
+                    let current = variable.analog.as_ref().map(|a| a.settings);
+
+                    let options: [(&str, Option<AnalogSettings>); 5] = [
+                        ("Off", None),
+                        ("Step (Viewport)", Some(AnalogSettings::step_viewport())),
+                        ("Step (Global)", Some(AnalogSettings::step_global())),
+                        (
+                            "Interpolated (Viewport)",
+                            Some(AnalogSettings::interpolated_viewport()),
+                        ),
+                        (
+                            "Interpolated (Global)",
+                            Some(AnalogSettings::interpolated_global()),
+                        ),
+                    ];
+
+                    for (label, config) in options {
+                        if ui.radio(current == config, label).clicked() && current != config {
+                            msgs.push(Message::SetAnalogSettings(affected_vidxs.into(), config));
+                        }
+                    }
+                });
+            }
         }
 
         if ui.button("Rename").clicked() {
