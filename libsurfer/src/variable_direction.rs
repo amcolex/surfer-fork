@@ -40,10 +40,10 @@ pub fn get_direction_string(
                 "{} ",
                 // Icon based on direction
                 direction.get_icon().unwrap_or_else(|| {
-                    if meta
-                        .as_ref()
-                        .is_some_and(|meta| meta.variable_type == Some(VariableType::VCDParameter))
-                    {
+                    if meta.as_ref().is_some_and(|meta| {
+                        meta.variable_type == Some(VariableType::VCDParameter)
+                            || meta.variable_type == Some(VariableType::RealParameter)
+                    }) {
                         // If parameter
                         icons::MAP_PIN_2_LINE
                     } else {

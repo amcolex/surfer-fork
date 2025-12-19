@@ -568,9 +568,10 @@ impl SystemState {
         if let Some(path) = path {
             let wave_container = waves.inner.as_waves().unwrap();
             let meta = wave_container.variable_meta(&path.root).ok();
-            let is_parameter = meta
-                .as_ref()
-                .is_some_and(|meta| meta.variable_type == Some(VariableType::VCDParameter));
+            let is_parameter = meta.as_ref().is_some_and(|meta| {
+                meta.variable_type == Some(VariableType::VCDParameter)
+                    || meta.variable_type == Some(VariableType::RealParameter)
+            });
             if !is_parameter && ui.button("Expand scope").clicked() {
                 let scope_path = path.root.path.clone();
                 let scope_type = ScopeType::WaveScope(scope_path.clone());
