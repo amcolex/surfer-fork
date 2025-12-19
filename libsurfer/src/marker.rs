@@ -4,14 +4,14 @@ use egui_extras::{Column, TableBuilder};
 use emath::{Align2, Pos2, Rect, Vec2};
 use epaint::{CornerRadius, FontId, Stroke};
 use itertools::Itertools;
-use num::BigInt;
+use num::{BigInt, One};
 
 use crate::SystemState;
 use crate::{
     config::SurferTheme,
     displayed_item::{DisplayedItem, DisplayedItemRef, DisplayedMarker},
     message::Message,
-    time::time_string,
+    time::TimeFormatter,
     view::{DrawingContext, ItemDrawingInfo},
     viewport::Viewport,
     wave_data::WaveData,
@@ -61,7 +61,7 @@ impl WaveData {
         viewport: &Viewport,
     ) {
         if let Some(marker) = &self.cursor {
-            let num_timestamps = self.num_timestamps().unwrap_or(1.into());
+            let num_timestamps = self.num_timestamps().unwrap_or_else(BigInt::one);
             let x = viewport.pixel_from_time(marker, size.x, &num_timestamps);
             self.draw_vertical_line(x, ctx, size, &theme.cursor.clone().into());
         }
@@ -74,7 +74,7 @@ impl WaveData {
         size: Vec2,
         viewport: &Viewport,
     ) {
-        let num_timestamps = self.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = self.num_timestamps().unwrap_or_else(BigInt::one);
         for (idx, marker) in &self.markers {
             let color = self.get_marker_color(*idx, theme);
             let stroke = Stroke {
@@ -165,7 +165,7 @@ impl WaveData {
         ctx: &mut DrawingContext,
         x: f32,
         y: f32,
-        text: String,
+        text: &str,
         text_size: f32,
         background_color: &Color32,
         foreground_color: Color32,
@@ -175,7 +175,7 @@ impl WaveData {
         let rect = ctx.painter.text(
             (ctx.to_screen)(x, y),
             Align2::CENTER_CENTER,
-            text.clone(),
+            text,
             FontId::proportional(text_size),
             foreground_color,
         );
@@ -228,7 +228,7 @@ impl WaveData {
                 ctx,
                 x,
                 size.y * 0.5,
-                idx_string,
+                &idx_string,
                 text_size,
                 background_color,
                 theme.foreground,
@@ -312,6 +312,11 @@ impl SystemState {
                             }
                         })
                         .body(|mut body| {
+                            let time_formatter = TimeFormatter::new(
+                                &waves.inner.metadata().timescale,
+                                &self.user.wanted_timeunit,
+                                &self.get_time_format(),
+                            );
                             for (marker_idx, row_marker_time, row_widget_text) in &markers {
                                 body.row(row_height, |mut row| {
                                     row.col(|ui| {
@@ -323,12 +328,8 @@ impl SystemState {
                                         }
                                     });
                                     for (_, col_marker_time, _) in &markers {
-                                        let diff = time_string(
-                                            &(*row_marker_time - *col_marker_time),
-                                            &waves.inner.metadata().timescale,
-                                            &self.user.wanted_timeunit,
-                                            &self.get_time_format(),
-                                        );
+                                        let diff = time_formatter
+                                            .format(&(*row_marker_time - *col_marker_time));
                                         row.col(|ui| {
                                             ui.label(diff);
                                         });
@@ -358,6 +359,11 @@ impl SystemState {
     ) {
         let text_size = ctx.cfg.text_size;
 
+        let time_formatter = TimeFormatter::new(
+            &waves.inner.metadata().timescale,
+            &self.user.wanted_timeunit,
+            &self.get_time_format(),
+        );
         for drawing_info in waves.drawing_infos.iter().filter_map(|item| match item {
             ItemDrawingInfo::Marker(marker) => Some(marker),
             _ => None,
@@ -381,14 +387,11 @@ impl SystemState {
             let x = waves.numbered_marker_location(drawing_info.idx, viewport, view_width);
 
             // Time string
-            let time = time_string(
+            let time = time_formatter.format(
                 waves
                     .markers
                     .get(&drawing_info.idx)
                     .unwrap_or(&BigInt::from(0)),
-                &waves.inner.metadata().timescale,
-                &self.user.wanted_timeunit,
-                &self.get_time_format(),
             );
 
             let text_color = *self.user.config.theme.get_best_text_color(background_color);
