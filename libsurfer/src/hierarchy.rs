@@ -226,7 +226,10 @@ impl SystemState {
         if let Some(waves) = &self.user.waves {
             match &waves.inner {
                 DataContainer::Waves(wave_container) => {
-                    let variables = self.filtered_variables(&wave_container.variables(false), true);
+                    let variables = self.filtered_variables(
+                        &wave_container.variables(false).collect::<Vec<_>>(),
+                        true,
+                    );
                     let row_height = ui
                         .text_style_height(&TextStyle::Monospace)
                         .max(ui.text_style_height(&TextStyle::Body));
@@ -528,7 +531,7 @@ impl SystemState {
             .iter()
             .map(|var| {
                 let meta = wave_container.variable_meta(var).ok();
-                let name_info = self.get_variable_name_info(wave_container, var);
+                let name_info = self.get_variable_name_info(var, &meta);
                 (var, meta, name_info)
             })
             .sorted_by_key(|(_, _, name_info)| {

@@ -319,7 +319,7 @@ impl SystemState {
             if full_path {
                 let variables = waves.inner.as_waves().unwrap().variables(false);
                 msgs.push(Message::AddVariables(
-                    self.filtered_variables(&variables, false),
+                    self.filtered_variables(&variables.collect::<Vec<_>>(), false),
                 ));
             } else {
                 // Iterate over the reversed list to get

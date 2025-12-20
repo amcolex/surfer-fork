@@ -42,7 +42,7 @@ use crate::time::time_string;
 use crate::transaction_container::TransactionStreamRef;
 use crate::translation::TranslationResultExt;
 use crate::util::uint_idx_to_alpha_idx;
-use crate::wave_container::{FieldRef, FieldRefExt, VariableRef, WaveContainer};
+use crate::wave_container::{FieldRef, FieldRefExt, VariableRef};
 use crate::{
     Message, MoveDir, SystemState, command_prompt::show_command_prompt, hierarchy::HierarchyStyle,
     wave_data::WaveData,
@@ -854,6 +854,7 @@ impl SystemState {
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         ctx: &egui::Context,
+        meta: &Option<VariableMeta>,
     ) -> egui::Response {
         let mut variable_label = self.draw_item_label(
             vidx,
@@ -863,20 +864,19 @@ impl SystemState {
             msgs,
             ui,
             ctx,
+            meta,
         );
 
         if self.show_tooltip() {
             variable_label = variable_label.on_hover_ui(|ui| {
-                let tooltip = if let Some(waves) = &self.user.waves {
+                let tooltip = if self.user.waves.is_some() {
                     if field.field.is_empty() {
-                        let wave_container = waves.inner.as_waves().unwrap();
-                        let meta = wave_container.variable_meta(&field.root).ok();
-                        variable_tooltip_text(&meta, &field.root)
+                        variable_tooltip_text(meta, &field.root)
                     } else {
                         "From translator".to_string()
                     }
                 } else {
-                    "No VCD loaded".to_string()
+                    "No waveform loaded".to_string()
                 };
                 ui.set_max_width(ui.spacing().tooltip_width);
                 ui.add(egui::Label::new(tooltip));
@@ -932,6 +932,7 @@ impl SystemState {
                                             msgs,
                                             ui,
                                             ctx,
+                                            &None,
                                         )
                                     },
                                 );
@@ -987,6 +988,7 @@ impl SystemState {
                             msgs,
                             ui,
                             ctx,
+                            &None,
                         )
                     })
                     .inner;
@@ -1104,6 +1106,7 @@ impl SystemState {
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         ctx: &egui::Context,
+        meta: &Option<VariableMeta>,
     ) -> egui::Response {
         let text_color = {
             let style = ui.style_mut();
@@ -1144,9 +1147,7 @@ impl SystemState {
             DisplayedItem::Variable(var) if field.is_some() => {
                 let field = field.unwrap();
                 if field.field.is_empty() {
-                    let wave_container =
-                        self.user.waves.as_ref().unwrap().inner.as_waves().unwrap();
-                    let name_info = self.get_variable_name_info(wave_container, &var.variable_ref);
+                    let name_info = self.get_variable_name_info(&var.variable_ref, meta);
 
                     if let Some(true_name) = name_info.and_then(|info| info.true_name) {
                         draw_true_name(
@@ -1234,7 +1235,16 @@ impl SystemState {
         ui: &mut Ui,
         ctx: &egui::Context,
     ) -> Rect {
-        let label = self.draw_item_label(vidx, displayed_id, displayed_item, None, msgs, ui, ctx);
+        let label = self.draw_item_label(
+            vidx,
+            displayed_id,
+            displayed_item,
+            None,
+            msgs,
+            ui,
+            ctx,
+            &None,
+        );
 
         self.draw_drag_source(msgs, vidx, &label, ui.ctx().input(|e| e.modifiers));
         match displayed_item {
@@ -1560,11 +1570,9 @@ impl SystemState {
 
     pub fn get_variable_name_info(
         &self,
-        wave_container: &WaveContainer,
         var: &VariableRef,
+        meta: &Option<VariableMeta>,
     ) -> Option<VariableNameInfo> {
-        let meta = wave_container.variable_meta(var).ok();
-
         self.variable_name_info_cache
             .borrow_mut()
             .entry(var.clone())
