@@ -20,7 +20,7 @@ use epaint::{
     text::{FontId, LayoutJob, TextFormat, TextWrapMode},
 };
 use itertools::Itertools;
-use num::{BigUint, Zero};
+use num::{BigInt, BigUint, One};
 use tracing::info;
 
 use surfer_translation_types::{
@@ -1500,7 +1500,7 @@ impl SystemState {
         // If time doesn't match cursor, i.e., we are not at a transition or the cursor is at zero
         // or we want the next value after the transition, return current
         if time != *ucursor
-            || BigUint::zero() == *ucursor
+            || BigUint::ZERO == *ucursor
             || self.transition_value() == TransitionValue::Next
         {
             return curr;
@@ -1508,7 +1508,7 @@ impl SystemState {
 
         // Otherwise, we need to check the previous value for transition display
         let prev_query_result = wave_container
-            .query_variable(variable, &(ucursor - BigUint::from(1u8)))
+            .query_variable(variable, &(ucursor - BigUint::one()))
             .ok()
             .flatten()?;
 
@@ -1650,7 +1650,7 @@ impl SystemState {
             &self.user.wanted_timeunit,
             &self.get_time_format(),
             &self.user.config,
-            &waves.num_timestamps().unwrap_or(1.into()),
+            &waves.num_timestamps().unwrap_or_else(BigInt::one),
         );
 
         waves.draw_ticks(

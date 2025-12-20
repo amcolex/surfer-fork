@@ -3,10 +3,11 @@ use derive_more::Display;
 use egui::{Context, Painter, PointerButton, Response, RichText, Sense, Window};
 use emath::{Align2, Pos2, Rect, RectTransform, Vec2};
 use epaint::{FontId, Stroke};
+use num::{BigInt, One};
 use serde::Deserialize;
 
 use crate::config::{SurferConfig, SurferTheme};
-use crate::time::time_string;
+use crate::time::TimeFormatter;
 use crate::view::DrawingContext;
 use crate::{Message, SystemState, wave_data::WaveData};
 
@@ -105,7 +106,7 @@ impl SystemState {
         waves: &WaveData,
         frame_width: f32,
     ) {
-        let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = waves.num_timestamps().unwrap_or_else(BigInt::one);
         let Some(end_location) = pointer_pos_canvas else {
             return;
         };
@@ -285,30 +286,18 @@ impl SystemState {
         } else {
             (current_location.x, start_location.x)
         };
-        let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = waves.num_timestamps().unwrap_or_else(BigInt::one);
         let start_time = waves.viewports[viewport_idx].as_time_bigint(minx, width, &num_timestamps);
         let end_time = waves.viewports[viewport_idx].as_time_bigint(maxx, width, &num_timestamps);
         let diff_time = &end_time - &start_time;
-        let timescale = &waves.inner.metadata().timescale;
-        let time_format = &self.get_time_format();
-        let start_time_str = time_string(
-            &start_time,
-            timescale,
+        let time_formatter = TimeFormatter::new(
+            &waves.inner.metadata().timescale,
             &self.user.wanted_timeunit,
-            time_format,
+            &self.get_time_format(),
         );
-        let end_time_str = time_string(
-            &end_time,
-            timescale,
-            &self.user.wanted_timeunit,
-            time_format,
-        );
-        let diff_time_str = time_string(
-            &diff_time,
-            timescale,
-            &self.user.wanted_timeunit,
-            time_format,
-        );
+        let start_time_str = time_formatter.format(&start_time);
+        let end_time_str = time_formatter.format(&end_time);
+        let diff_time_str = time_formatter.format(&diff_time);
         draw_gesture_text(
             ctx,
             (ctx.to_screen)(current_location.x, current_location.y),

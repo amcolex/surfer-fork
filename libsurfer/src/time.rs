@@ -7,9 +7,10 @@ use enum_iterator::Sequence;
 use epaint::{FontId, Stroke};
 use ftr_parser::types::Timescale;
 use itertools::Itertools;
-use num::{BigInt, BigRational, ToPrimitive};
+use num::{BigInt, BigRational, ToPrimitive, Zero};
 use pure_rust_locales::{Locale, locale_match};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use sys_locale::get_locale;
 
 use crate::config::SurferConfig;
@@ -17,7 +18,7 @@ use crate::viewport::Viewport;
 use crate::wave_data::WaveData;
 use crate::{Message, SystemState, translation::group_n_chars, view::DrawingContext};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TimeScale {
     pub unit: TimeUnit,
     pub multiplier: Option<u32>,
@@ -62,6 +63,40 @@ const THIN_SPACE: &str = "\u{2009}";
 
 /// Candidate multipliers used to choose tick spacing.
 pub const TICK_STEPS: [f64; 8] = [1., 2., 2.5, 5., 10., 20., 25., 50.];
+
+/// Cached locale-specific formatting properties.
+struct LocaleFormatCache {
+    grouping: &'static [i64],
+    thousands_sep: String,
+    decimal_point: String,
+}
+
+static LOCALE_FORMAT_CACHE: OnceLock<LocaleFormatCache> = OnceLock::new();
+
+/// Get the cached locale formatting properties.
+fn get_locale_format_cache() -> &'static LocaleFormatCache {
+    LOCALE_FORMAT_CACHE.get_or_init(|| {
+        let locale = get_locale()
+            .unwrap_or_else(|| "en-US".to_string())
+            .as_str()
+            .try_into()
+            .unwrap_or(Locale::en_US);
+        create_cache(&locale)
+    })
+}
+
+fn create_cache(locale: &Locale) -> LocaleFormatCache {
+    let grouping = locale_match!(locale => LC_NUMERIC::GROUPING);
+    let thousands_sep =
+        locale_match!(locale => LC_NUMERIC::THOUSANDS_SEP).replace('\u{202f}', THIN_SPACE);
+    let decimal_point = locale_match!(locale => LC_NUMERIC::DECIMAL_POINT).to_string();
+
+    LocaleFormatCache {
+        grouping,
+        thousands_sep,
+        decimal_point,
+    }
+}
 
 impl From<wellen::TimescaleUnit> for TimeUnit {
     fn from(timescale: wellen::TimescaleUnit) -> Self {
@@ -139,7 +174,7 @@ pub fn timeunit_menu(ui: &mut Ui, msgs: &mut Vec<Message>, wanted_timeunit: &Tim
 }
 
 /// How to format the time stamps.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct TimeFormat {
     /// How to format the numeric part of the time string.
     format: TimeStringFormatting,
@@ -160,18 +195,31 @@ impl Default for TimeFormat {
 }
 
 impl TimeFormat {
-    /// Utility function to get a copy, but with some values changed.
-    pub fn get_with_changes(
-        &self,
-        format: Option<TimeStringFormatting>,
-        show_space: Option<bool>,
-        show_unit: Option<bool>,
-    ) -> Self {
+    /// Create a new TimeFormat with custom settings.
+    pub fn new(format: TimeStringFormatting, show_space: bool, show_unit: bool) -> Self {
         TimeFormat {
-            format: format.unwrap_or(self.format),
-            show_space: show_space.unwrap_or(self.show_space),
-            show_unit: show_unit.unwrap_or(self.show_unit),
+            format,
+            show_space,
+            show_unit,
         }
+    }
+
+    /// Set the format type.
+    pub fn with_format(mut self, format: TimeStringFormatting) -> Self {
+        self.format = format;
+        self
+    }
+
+    /// Set whether to show space between number and unit.
+    pub fn with_space(mut self, show_space: bool) -> Self {
+        self.show_space = show_space;
+        self
+    }
+
+    /// Set whether to show the time unit.
+    pub fn with_unit(mut self, show_unit: bool) -> Self {
+        self.show_unit = show_unit;
+        self
     }
 }
 
@@ -223,15 +271,15 @@ fn strip_trailing_zeros_and_period(time: String) -> String {
 
 /// Format number based on [`TimeStringFormatting`], i.e., possibly group digits together
 /// and use correct separator for each group.
-fn split_and_format_number(time: String, format: &TimeStringFormatting) -> String {
+fn split_and_format_number(time: &str, format: &TimeStringFormatting) -> String {
     match format {
-        TimeStringFormatting::No => time,
-        TimeStringFormatting::Locale => format_locale(time),
+        TimeStringFormatting::No => time.to_string(),
+        TimeStringFormatting::Locale => format_locale(time, get_locale_format_cache()),
         TimeStringFormatting::SI => format_si(time),
     }
 }
 
-fn format_si(time: String) -> String {
+fn format_si(time: &str) -> String {
     if let Some((integer_part, fractional_part)) = time.split_once('.') {
         let integer_result = if integer_part.len() > 4 {
             group_n_chars(integer_part, 3).join(THIN_SPACE)
@@ -247,33 +295,26 @@ fn format_si(time: String) -> String {
             format!("{integer_result}.{fractional_part}")
         }
     } else if time.len() > 4 {
-        group_n_chars(&time, 3).join(THIN_SPACE)
+        group_n_chars(time, 3).join(THIN_SPACE)
     } else {
-        time
+        time.to_string()
     }
 }
 
-fn format_locale(time: String) -> String {
-    let locale: Locale = get_locale()
-        .unwrap_or_else(|| "en-US".to_string())
-        .as_str()
-        .try_into()
-        .unwrap_or(Locale::en_US);
-    let grouping = locale_match!(locale => LC_NUMERIC::GROUPING);
-    if grouping[0] > 0 {
-        // "\u{202f}" (non-breaking thin space) does not exist in used font, replace with "\u{2009}" (thin space)
-        let thousands_sep =
-            locale_match!(locale => LC_NUMERIC::THOUSANDS_SEP).replace('\u{202f}', THIN_SPACE);
+fn format_locale(time: &str, cache: &LocaleFormatCache) -> String {
+    if cache.grouping[0] > 0 {
         if let Some((integer_part, fractional_part)) = time.split_once('.') {
-            let decimal_point = locale_match!(locale => LC_NUMERIC::DECIMAL_POINT);
-            let integer_result =
-                group_n_chars(integer_part, grouping[0] as usize).join(thousands_sep.as_str());
-            format!("{integer_result}{decimal_point}{fractional_part}")
+            let integer_result = group_n_chars(integer_part, cache.grouping[0] as usize)
+                .join(cache.thousands_sep.as_str());
+            format!(
+                "{integer_result}{decimal_point}{fractional_part}",
+                decimal_point = &cache.decimal_point
+            )
         } else {
-            group_n_chars(&time, grouping[0] as usize).join(thousands_sep.as_str())
+            group_n_chars(time, cache.grouping[0] as usize).join(cache.thousands_sep.as_str())
         }
     } else {
-        time
+        time.to_string()
     }
 }
 
@@ -281,13 +322,13 @@ fn format_locale(time: String) -> String {
 fn find_auto_scale(time: &BigInt, timescale: &TimeScale) -> TimeUnit {
     // In case of seconds, nothing to do as it is the largest supported unit
     // (unless we want to support minutes etc...)
-    if timescale.unit == TimeUnit::Seconds {
+    if matches!(timescale.unit, TimeUnit::Seconds) {
         return TimeUnit::Seconds;
     }
     let multiplier_digits = timescale.multiplier.unwrap_or(1).ilog10();
     let start_digits = -timescale.unit.exponent();
     for e in (3..=start_digits).step_by(3).rev() {
-        if (time % (BigInt::from(10).pow(e as u32 - multiplier_digits))) == BigInt::from(0)
+        if (time % (BigInt::from(10).pow(e as u32 - multiplier_digits))).is_zero()
             && let Some(unit) = TimeUnit::from_exponent(e - start_digits)
         {
             return unit;
@@ -296,52 +337,116 @@ fn find_auto_scale(time: &BigInt, timescale: &TimeScale) -> TimeUnit {
     timescale.unit
 }
 
+/// Formatter for time strings with caching of computed values.
+/// Enables efficient formatting of multiple time values with the same timescale and format settings.
+pub struct TimeFormatter {
+    timescale: TimeScale,
+    wanted_unit: TimeUnit,
+    time_format: TimeFormat,
+    /// Cached exponent difference (wanted - data)
+    exponent_diff: i8,
+    /// Cached unit string (empty if show_unit is false)
+    unit_string: String,
+    /// Cached space string (empty if show_space is false)
+    space_string: String,
+}
+
+impl TimeFormatter {
+    /// Create a new TimeFormatter with the given settings.
+    pub fn new(timescale: &TimeScale, wanted_unit: &TimeUnit, time_format: &TimeFormat) -> Self {
+        // Note: For Auto unit, we defer resolution to format() time since it depends on the value
+        let (exponent_diff, unit_string) = if *wanted_unit == TimeUnit::Auto {
+            // Use placeholder values for Auto - will be computed per-format call
+            (0i8, String::new())
+        } else {
+            let wanted_exponent = wanted_unit.exponent();
+            let data_exponent = timescale.unit.exponent();
+            let exponent_diff = wanted_exponent - data_exponent;
+
+            let unit_string = if time_format.show_unit {
+                wanted_unit.to_string()
+            } else {
+                String::new()
+            };
+
+            (exponent_diff, unit_string)
+        };
+
+        TimeFormatter {
+            timescale: timescale.clone(),
+            wanted_unit: *wanted_unit,
+            time_format: time_format.clone(),
+            exponent_diff,
+            unit_string,
+            space_string: if time_format.show_space {
+                " ".to_string()
+            } else {
+                String::new()
+            },
+        }
+    }
+
+    /// Format a single time value.
+    pub fn format(&self, time: &BigInt) -> String {
+        if self.wanted_unit == TimeUnit::None {
+            return split_and_format_number(&time.to_string(), &self.time_format.format);
+        }
+
+        // Handle Auto unit by resolving it for this specific time value
+        let (exponent_diff, unit_string) = if self.wanted_unit == TimeUnit::Auto {
+            let auto_unit = find_auto_scale(time, &self.timescale);
+            let wanted_exponent = auto_unit.exponent();
+            let data_exponent = self.timescale.unit.exponent();
+            let exp_diff = wanted_exponent - data_exponent;
+
+            let unit_str = if self.time_format.show_unit {
+                auto_unit.to_string()
+            } else {
+                String::new()
+            };
+
+            (exp_diff, unit_str)
+        } else {
+            (self.exponent_diff, self.unit_string.clone())
+        };
+
+        let timestring = if exponent_diff >= 0 {
+            let precision = exponent_diff as usize;
+            strip_trailing_zeros_and_period(format!(
+                "{scaledtime:.precision$}",
+                scaledtime = BigRational::new(
+                    time * self.timescale.multiplier.unwrap_or(1),
+                    (BigInt::from(10)).pow(exponent_diff as u32)
+                )
+                .to_f64()
+                .unwrap_or(f64::NAN)
+            ))
+        } else {
+            (time
+                * self.timescale.multiplier.unwrap_or(1)
+                * (BigInt::from(10)).pow(-exponent_diff as u32))
+            .to_string()
+        };
+
+        format!(
+            "{scaledtime}{space}{unit}",
+            scaledtime = split_and_format_number(&timestring, &self.time_format.format),
+            space = &self.space_string,
+            unit = &unit_string
+        )
+    }
+}
+
 /// Format the time string taking all settings into account.
+/// This function delegates to TimeFormatter which handles the Auto timeunit.
 pub fn time_string(
     time: &BigInt,
     timescale: &TimeScale,
     wanted_timeunit: &TimeUnit,
     wanted_time_format: &TimeFormat,
 ) -> String {
-    if wanted_timeunit == &TimeUnit::Auto {
-        let auto_timeunit = find_auto_scale(time, timescale);
-        return time_string(time, timescale, &auto_timeunit, wanted_time_format);
-    }
-    if wanted_timeunit == &TimeUnit::None {
-        return split_and_format_number(time.to_string(), &wanted_time_format.format);
-    }
-    let wanted_exponent = wanted_timeunit.exponent();
-    let data_exponent = timescale.unit.exponent();
-    let exponent_diff = wanted_exponent - data_exponent;
-    let timeunit = if wanted_time_format.show_unit {
-        wanted_timeunit.to_string()
-    } else {
-        String::new()
-    };
-    let space = if wanted_time_format.show_space {
-        " ".to_string()
-    } else {
-        String::new()
-    };
-    let timestring = if exponent_diff >= 0 {
-        let precision = exponent_diff as usize;
-        strip_trailing_zeros_and_period(format!(
-            "{scaledtime:.precision$}",
-            scaledtime = BigRational::new(
-                time * timescale.multiplier.unwrap_or(1),
-                (BigInt::from(10)).pow(exponent_diff as u32)
-            )
-            .to_f64()
-            .unwrap_or(f64::NAN)
-        ))
-    } else {
-        (time * timescale.multiplier.unwrap_or(1) * (BigInt::from(10)).pow(-exponent_diff as u32))
-            .to_string()
-    };
-    format!(
-        "{scaledtime}{space}{timeunit}",
-        scaledtime = split_and_format_number(timestring, &wanted_time_format.format)
-    )
+    let formatter = TimeFormatter::new(timescale, wanted_timeunit, wanted_time_format);
+    formatter.format(time)
 }
 
 impl WaveData {
@@ -361,7 +466,7 @@ impl WaveData {
     pub fn draw_ticks(
         &self,
         color: Option<&Color32>,
-        ticks: &Vec<(String, f32)>,
+        ticks: &[(String, f32)],
         ctx: &DrawingContext<'_>,
         y_offset: f32,
         align: Align2,
@@ -383,11 +488,12 @@ impl WaveData {
 
 impl SystemState {
     pub fn get_time_format(&self) -> TimeFormat {
-        self.user.config.default_time_format.get_with_changes(
-            self.user.time_string_format,
-            None,
-            None,
-        )
+        let time_format = self.user.config.default_time_format.clone();
+        if let Some(time_string_format) = self.user.time_string_format {
+            time_format.with_format(time_string_format)
+        } else {
+            time_format
+        }
     }
 }
 
@@ -442,13 +548,15 @@ pub fn get_ticks(
             .ceil() as f32
             + 1.;
         if high <= max_labels {
+            let time_formatter = TimeFormatter::new(timescale, wanted_timeunit, time_format);
             ticks = (0..high as i16)
                 .map(|v| BigInt::from(((v as f64) * scaled_step + rounded_min_label_time) as i128))
                 .unique()
                 .map(|tick| {
                     (
                         // Time string
-                        time_string(&tick, timescale, wanted_timeunit, time_format),
+                        time_formatter.format(&tick),
+                        // X position
                         viewport.pixel_from_time(&tick, frame_width, num_timestamps),
                     )
                 })
@@ -769,28 +877,22 @@ mod test {
         use crate::time::format_si;
 
         // 4-digit rule: no grouping for 4 digits or less
-        assert_eq!(format_si("1234.56".to_string()), "1234.56");
-        assert_eq!(format_si("123.4".to_string()), "123.4");
+        assert_eq!(format_si("1234.56"), "1234.56");
+        assert_eq!(format_si("123.4"), "123.4");
 
         // Grouping for 5+ digits
-        assert_eq!(format_si("12345.67".to_string()), "12\u{2009}345.67");
-        assert_eq!(
-            format_si("1234567.89".to_string()),
-            "1\u{2009}234\u{2009}567.89"
-        );
+        assert_eq!(format_si("12345.67"), "12\u{2009}345.67");
+        assert_eq!(format_si("1234567.89"), "1\u{2009}234\u{2009}567.89");
         // No decimal part
-        assert_eq!(format_si("12345".to_string()), "12\u{2009}345");
-        assert_eq!(format_si("123".to_string()), "123");
+        assert_eq!(format_si("12345"), "12\u{2009}345");
+        assert_eq!(format_si("123"), "123");
 
         // Empty inputs
-        assert_eq!(format_si("0.123".to_string()), "0.123");
-        assert_eq!(format_si("".to_string()), "");
+        assert_eq!(format_si("0.123"), "0.123");
+        assert_eq!(format_si(""), "");
 
         // Decimal grouping
-        assert_eq!(
-            format_si("123.4567890".to_string()),
-            "123.456\u{2009}789\u{2009}0"
-        );
+        assert_eq!(format_si("123.4567890"), "123.456\u{2009}789\u{2009}0");
     }
 
     #[test]
@@ -1083,6 +1185,133 @@ mod test {
             find_auto_scale(&BigInt::from(1), &ts),
             TimeUnit::FemtoSeconds
         );
+    }
+
+    #[test]
+    fn test_locale_cache_en_us() {
+        use crate::time::{create_cache, format_locale};
+        use pure_rust_locales::Locale;
+
+        let locale = Locale::en_US;
+        let cache = create_cache(&locale);
+
+        // en_US uses period as decimal point and comma as thousands separator
+        let result = format_locale("1234567.89", &cache);
+        assert_eq!(result, "1,234,567.89");
+    }
+
+    #[test]
+    fn test_locale_cache_de_de() {
+        use crate::time::{create_cache, format_locale};
+        use pure_rust_locales::Locale;
+
+        let locale = Locale::de_DE;
+        let cache = create_cache(&locale);
+
+        let result = format_locale("1234567.89", &cache);
+        assert_eq!(result, "1.234.567,89");
+    }
+
+    #[test]
+    fn test_locale_cache_fr_fr() {
+        use crate::time::{create_cache, format_locale};
+        use pure_rust_locales::Locale;
+
+        let locale = Locale::fr_FR;
+        let cache = create_cache(&locale);
+
+        // fr_FR typically uses space/thin_space and comma
+        let result = format_locale("1234567.89", &cache);
+        // Verify it produces valid output
+        assert_eq!(result, "1\u{2009}234\u{2009}567,89");
+    }
+
+    #[test]
+    fn test_locale_cache_small_numbers() {
+        use crate::time::{create_cache, format_locale};
+        use pure_rust_locales::Locale;
+
+        let locale = Locale::en_US;
+        let cache = create_cache(&locale);
+
+        // Numbers smaller than grouping threshold should remain unchanged
+        assert_eq!(format_locale("123", &cache), "123");
+        assert_eq!(format_locale("12.34", &cache), "12.34");
+        assert_eq!(format_locale("0", &cache), "0");
+    }
+
+    #[test]
+    fn test_locale_cache_consistency_across_locales() {
+        use crate::time::create_cache;
+        use pure_rust_locales::Locale;
+
+        // Verify that creating cache for the same locale twice produces consistent results
+        let cache1 = create_cache(&Locale::en_US);
+        let cache2 = create_cache(&Locale::en_US);
+
+        assert_eq!(cache1.thousands_sep, cache2.thousands_sep);
+        assert_eq!(cache1.decimal_point, cache2.decimal_point);
+        assert_eq!(cache1.grouping, cache2.grouping);
+    }
+
+    #[test]
+    fn test_create_cache_from_various_locales() {
+        use crate::time::{create_cache, format_locale};
+        use pure_rust_locales::Locale;
+
+        // Test that create_cache works for many Locale variants without panicking
+        let locales = vec![
+            Locale::en_US,
+            Locale::de_DE,
+            Locale::fr_FR,
+            Locale::es_ES,
+            Locale::it_IT,
+            Locale::pt_BR,
+            Locale::pt_PT,
+            Locale::ja_JP,
+            Locale::zh_CN,
+            Locale::zh_TW,
+            Locale::ru_RU,
+            Locale::ko_KR,
+            Locale::pl_PL,
+            Locale::tr_TR,
+            Locale::nl_NL,
+            Locale::sv_SE,
+            Locale::da_DK,
+            Locale::fi_FI,
+            Locale::el_GR,
+            Locale::hu_HU,
+            Locale::cs_CZ,
+            Locale::ro_RO,
+            Locale::th_TH,
+            Locale::vi_VN,
+            Locale::ar_SA,
+            Locale::he_IL,
+            Locale::id_ID,
+            Locale::uk_UA,
+            Locale::en_GB,
+            Locale::en_AU,
+            Locale::en_CA,
+            Locale::en_NZ,
+            Locale::en_IN,
+            Locale::fr_CA,
+            Locale::de_AT,
+            Locale::de_CH,
+            Locale::fr_CH,
+            Locale::it_CH,
+            Locale::es_MX,
+            Locale::es_AR,
+        ];
+
+        for locale in locales {
+            let cache = create_cache(&locale);
+            // Check so that it is not empty for a sample number
+            assert!(
+                !format_locale("1234567.89", &cache).is_empty(),
+                "Failed for {:?}",
+                locale
+            );
+        }
     }
 }
 
