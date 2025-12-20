@@ -871,7 +871,14 @@ impl SystemState {
             variable_label = variable_label.on_hover_ui(|ui| {
                 let tooltip = if self.user.waves.is_some() {
                     if field.field.is_empty() {
-                        variable_tooltip_text(meta, &field.root)
+                        variable_tooltip_text(
+                            &(meta.clone().or_else(|| {
+                                let wave_container =
+                                    self.user.waves.as_ref().unwrap().inner.as_waves().unwrap();
+                                wave_container.variable_meta(&field.root).ok()
+                            })),
+                            &field.root,
+                        )
                     } else {
                         "From translator".to_string()
                     }
