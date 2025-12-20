@@ -287,6 +287,8 @@ pub enum Message {
     #[cfg(feature = "python")]
     ReloadPythonPlugin,
     SaveStateFile(Option<PathBuf>),
+    /// Load state from data.
+    LoadStateFromData(Vec<u8>),
     LoadStateFile(Option<PathBuf>),
     LoadState(Box<UserState>, Option<PathBuf>),
     SetStateFile(PathBuf),
