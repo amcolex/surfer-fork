@@ -226,7 +226,10 @@ impl SystemState {
         if let Some(waves) = &self.user.waves {
             match &waves.inner {
                 DataContainer::Waves(wave_container) => {
-                    let variables = self.filtered_variables(&wave_container.variables(false), true);
+                    let variables = self.filtered_variables(
+                        &wave_container.variables(false).collect::<Vec<_>>(),
+                        true,
+                    );
                     let row_height = ui
                         .text_style_height(&TextStyle::Monospace)
                         .max(ui.text_style_height(&TextStyle::Body));
