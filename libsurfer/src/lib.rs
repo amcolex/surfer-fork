@@ -1788,7 +1788,11 @@ impl SystemState {
                             self.get_variable_value(
                                 waves,
                                 &field_ref,
-                                &waves.cursor.as_ref().and_then(num::BigInt::to_biguint),
+                                waves
+                                    .cursor
+                                    .as_ref()
+                                    .and_then(num::BigInt::to_biguint)
+                                    .as_ref(),
                             )
                         } else {
                             None
