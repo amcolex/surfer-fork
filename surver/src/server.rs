@@ -64,8 +64,10 @@ impl FileInfo {
                 dur.as_secs() as i64,
                 dur.subsec_nanos(),
             )
-            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
-            .unwrap_or_else(|| "Incorrect timestamp".to_string());
+            .map_or_else(
+                || "Incorrect timestamp".to_string(),
+                |dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            );
         }
         "unknown".to_string()
     }
@@ -325,17 +327,17 @@ async fn handle_cmd(
         (Some(file_index), "reload", []) => {
             let mut state_guard = state.write().expect("State lock poisoned in reload");
             // Check file existence, size, and mtime
-            let meta = match fs::metadata(state_guard.file_infos[file_index].filename.clone()) {
-                Ok(m) => m,
-                Err(_) => {
+            let meta =
+                if let Ok(m) = fs::metadata(state_guard.file_infos[file_index].filename.clone()) {
+                    m
+                } else {
                     drop(state_guard);
                     return Ok(Response::builder()
                         .status(StatusCode::NOT_FOUND)
                         .header(CONTENT_TYPE, JSON_MIME)
                         .default_header()
                         .body(Full::from(b"error: file not found".to_vec()))?);
-                }
-            };
+                };
             let mtime = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
             // Should probably look at file lengths as well for extra safety, but they are not updated correctly at the moment
             let unchanged = state_guard.file_infos[file_index].last_file_mtime == Some(mtime)
@@ -638,7 +640,7 @@ fn loader(
                             .filter(|id| {
                                 !state_guard.file_infos[file_index].signals.contains_key(id)
                             })
-                            .cloned()
+                            .copied()
                             .collect::<Vec<_>>()
                     };
 

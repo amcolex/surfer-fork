@@ -220,11 +220,7 @@ impl WcpServer {
 
             tokio::select! {
                 msg = reader.read_frame() => {
-                    let msg = match msg? {
-                        Some(msg) => msg,
-                        None => continue,
-                    };
-
+                    let Some(msg) = msg? else { continue };
                     if let WcpCSMessage::command(WcpCommand::shutdown) = msg {
                         return Ok(());
                     }

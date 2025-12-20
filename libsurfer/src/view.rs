@@ -1,5 +1,6 @@
 use crate::{
     config::TransitionValue,
+    dialog::{draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog},
     displayed_item::DisplayedVariable,
     fzcmd::expand_command,
     menus::generic_context_menu,
@@ -313,12 +314,12 @@ impl SystemState {
             self.draw_log_window(ctx, &mut msgs);
         }
 
-        if let Some(dialog) = &self.user.show_reload_suggestion {
-            self.draw_reload_waveform_dialog(ctx, dialog, &mut msgs);
+        if let Some(dialog) = self.user.show_reload_suggestion {
+            draw_reload_waveform_dialog(ctx, dialog, &mut msgs);
         }
 
-        if let Some(dialog) = &self.user.show_open_sibling_state_file_suggestion {
-            self.draw_open_sibling_state_file_dialog(ctx, dialog, &mut msgs);
+        if let Some(dialog) = self.user.show_open_sibling_state_file_suggestion {
+            draw_open_sibling_state_file_dialog(ctx, dialog, &mut msgs);
         }
 
         if self.user.show_performance {
@@ -715,7 +716,7 @@ impl SystemState {
                         Layout::right_to_left(Align::TOP)
                     },
                     |ui| {
-                        ui.add_space(10.0 * *level as f32);
+                        ui.add_space(10.0 * f32::from(*level));
                         if any_groups {
                             let response =
                                 self.hierarchy_icon(ui, has_children, *unfolded, alignment);
@@ -824,8 +825,7 @@ impl SystemState {
             if !modifiers.ctrl
                 && !(self.user.waves.as_ref())
                     .and_then(|w| w.items_tree.get_visible(vidx))
-                    .map(|i| i.selected)
-                    .unwrap_or(false)
+                    .is_some_and(|i| i.selected)
             {
                 msgs.push(Message::FocusItem(vidx));
                 msgs.push(Message::ItemSelectionClear);
@@ -1058,7 +1058,7 @@ impl SystemState {
             )
         });
 
-        let left_x = |level: u8| -> f32 { rect_with_margin.left() + level as f32 * 10.0 };
+        let left_x = |level: u8| -> f32 { rect_with_margin.left() + f32::from(level) * 10.0 };
         let Some(insert_level) = level_range.find_or_last(|&level| {
             let mut rect = expanded_rect.with_min_x(left_x(level));
             rect.set_width(10.0);
@@ -1086,8 +1086,7 @@ impl SystemState {
                     waves
                         .items_tree
                         .to_displayed(insert_vidx)
-                        .map(|index| index.0)
-                        .unwrap_or_else(|| waves.items_tree.len()),
+                        .map_or_else(|| waves.items_tree.len(), |index| index.0),
                 ),
                 level: insert_level,
             },
@@ -1124,7 +1123,7 @@ impl SystemState {
             } else {
                 style.visuals.selection.bg_fill =
                     self.user.config.theme.primary_ui_color.background;
-                *self.get_item_text_color(displayed_item)
+                self.get_item_text_color(displayed_item)
             }
         };
 
@@ -1379,7 +1378,7 @@ impl SystemState {
                 }
 
                 let backgroundcolor =
-                    &self.get_background_color(waves, drawing_info, vidx, item_count);
+                    self.get_background_color(waves, drawing_info, vidx, item_count);
                 self.draw_background(
                     drawing_info,
                     y_zero,
@@ -1404,11 +1403,7 @@ impl SystemState {
                             ui.label(
                                 RichText::new(v)
                                     .color(
-                                        *self
-                                            .user
-                                            .config
-                                            .theme
-                                            .get_best_text_color(backgroundcolor),
+                                        self.user.config.theme.get_best_text_color(backgroundcolor),
                                     )
                                     .line_height(Some(
                                         self.user.config.layout.waveforms_line_height,
@@ -1437,7 +1432,7 @@ impl SystemState {
                             );
 
                             ui.label(RichText::new(format!("Δ: {delta}",)).color(
-                                *self.user.config.theme.get_best_text_color(backgroundcolor),
+                                self.user.config.theme.get_best_text_color(backgroundcolor),
                             ))
                             .context_menu(|ui| {
                                 self.item_context_menu(None, msgs, ui, vidx);
@@ -1586,13 +1581,13 @@ impl SystemState {
         ctx: &DrawingContext<'_>,
         gap: f32,
         frame_width: f32,
-        background_color: &Color32,
+        background_color: Color32,
     ) {
         // Draw background
         let min = (ctx.to_screen)(0.0, drawing_info.top() - y_zero - gap);
         let max = (ctx.to_screen)(frame_width, drawing_info.bottom() - y_zero + gap);
         ctx.painter
-            .rect_filled(Rect { min, max }, CornerRadiusF32::ZERO, *background_color);
+            .rect_filled(Rect { min, max }, CornerRadiusF32::ZERO, background_color);
     }
 
     pub fn get_background_color(
@@ -1608,7 +1603,7 @@ impl SystemState {
         {
             return self.user.config.theme.highlight_background;
         }
-        *waves
+        waves
             .displayed_items
             .get(
                 &waves
@@ -1622,14 +1617,14 @@ impl SystemState {
             .unwrap_or_else(|| self.get_default_alternating_background_color(item_count))
     }
 
-    fn get_default_alternating_background_color(&self, item_count: usize) -> &Color32 {
+    fn get_default_alternating_background_color(&self, item_count: usize) -> Color32 {
         // Set background color
         if self.user.config.theme.alt_frequency != 0
             && (item_count / self.user.config.theme.alt_frequency) % 2 == 1
         {
-            &self.user.config.theme.canvas_colors.alt_background
+            self.user.config.theme.canvas_colors.alt_background
         } else {
-            &Color32::TRANSPARENT
+            Color32::TRANSPARENT
         }
     }
 
@@ -1654,7 +1649,7 @@ impl SystemState {
         );
 
         waves.draw_ticks(
-            Some(&self.user.config.theme.foreground),
+            Some(self.user.config.theme.foreground),
             &ticks,
             ctx,
             0.0,

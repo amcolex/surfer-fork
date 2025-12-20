@@ -92,9 +92,8 @@ impl SystemState {
             let active_scope = waves.active_scope.as_ref().unwrap_or(&empty_scope);
             match active_scope {
                 ScopeType::WaveScope(scope) => {
-                    let wave_container = match waves.inner.as_waves() {
-                        Some(wc) => wc,
-                        None => return,
+                    let Some(wave_container) = waves.inner.as_waves() else {
+                        return;
                     };
                     let variables =
                         self.filtered_variables(&wave_container.variables_in_scope(scope), false);
@@ -371,9 +370,8 @@ impl SystemState {
         ui: &mut Ui,
     ) {
         // Extract wave container once to avoid repeated as_waves().unwrap() calls
-        let wave_container = match wave.inner.as_waves() {
-            Some(wc) => wc,
-            None => return,
+        let Some(wave_container) = wave.inner.as_waves() else {
+            return;
         };
 
         let Some(child_scopes) = wave_container
@@ -471,9 +469,8 @@ impl SystemState {
         ui: &mut Ui,
     ) {
         // Extract wave container once to avoid unwrap
-        let wave_container = match wave.inner.as_waves() {
-            Some(wc) => wc,
-            None => return,
+        let Some(wave_container) = wave.inner.as_waves() else {
+            return;
         };
 
         let Some(child_scopes) = wave_container
@@ -537,12 +534,11 @@ impl SystemState {
                     .and_then(|info| info.priority)
                     .unwrap_or_default()
             })
-            .skip(row_range.as_ref().map(|r| r.start).unwrap_or(0))
+            .skip(row_range.as_ref().map_or(0, |r| r.start))
             .take(
                 row_range
                     .as_ref()
-                    .map(|r| r.end - r.start)
-                    .unwrap_or(variables.len()),
+                    .map_or(variables.len(), |r| r.end - r.start),
             );
 
         // Precompute common font metrics once per frame to avoid expensive per-row work.

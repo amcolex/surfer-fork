@@ -124,11 +124,7 @@ impl VariableFilter {
                 VariableNameFilterType::Contain => escape(&filter_str),
                 _ => unreachable!(),
             };
-            let rebuild = cache
-                .regex_pattern
-                .as_ref()
-                .map(|p| p != &pat)
-                .unwrap_or(true)
+            let rebuild = (cache.regex_pattern.as_ref() != Some(&pat))
                 || cache.regex_case_insensitive != case_insensitive
                 || cache.regex.is_none();
 

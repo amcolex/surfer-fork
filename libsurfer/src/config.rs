@@ -491,36 +491,36 @@ pub struct SurferTheme {
     pub theme_names: Vec<String>,
 }
 
-fn get_luminance(color: &Color32) -> f32 {
+fn get_luminance(color: Color32) -> f32 {
     let rg = if color.r() < 10 {
-        color.r() as f32 / 3294.0
+        f32::from(color.r()) / 3294.0
     } else {
-        (color.r() as f32 / 269.0 + 0.0513).powf(2.4)
+        (f32::from(color.r()) / 269.0 + 0.0513).powf(2.4)
     };
     let gg = if color.g() < 10 {
-        color.g() as f32 / 3294.0
+        f32::from(color.g()) / 3294.0
     } else {
-        (color.g() as f32 / 269.0 + 0.0513).powf(2.4)
+        (f32::from(color.g()) / 269.0 + 0.0513).powf(2.4)
     };
     let bg = if color.b() < 10 {
-        color.b() as f32 / 3294.0
+        f32::from(color.b()) / 3294.0
     } else {
-        (color.b() as f32 / 269.0 + 0.0513).powf(2.4)
+        (f32::from(color.b()) / 269.0 + 0.0513).powf(2.4)
     };
     0.2126 * rg + 0.7152 * gg + 0.0722 * bg
 }
 
 impl SurferTheme {
-    pub fn get_color(&self, color: &str) -> Option<&Color32> {
-        self.colors.get(color)
+    pub fn get_color(&self, color: &str) -> Option<Color32> {
+        self.colors.get(color).copied()
     }
 
-    pub fn get_best_text_color(&self, backgroundcolor: &Color32) -> &Color32 {
+    pub fn get_best_text_color(&self, backgroundcolor: Color32) -> Color32 {
         // Based on https://ux.stackexchange.com/questions/82056/how-to-measure-the-contrast-between-any-given-color-and-white
 
         // Compute luminance
-        let l_foreground = get_luminance(&self.foreground);
-        let l_alt_text_color = get_luminance(&self.alt_text_color);
+        let l_foreground = get_luminance(self.foreground);
+        let l_alt_text_color = get_luminance(self.alt_text_color);
         let l_background = get_luminance(backgroundcolor);
 
         // Compute contrast ratio
@@ -531,9 +531,9 @@ impl SurferTheme {
 
         // Return color with highest contrast
         if cr_foreground > cr_alt_text_color {
-            &self.foreground
+            self.foreground
         } else {
-            &self.alt_text_color
+            self.alt_text_color
         }
     }
 
