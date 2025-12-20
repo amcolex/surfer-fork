@@ -97,6 +97,7 @@ pub struct TranslatedValue {
 }
 
 impl TranslatedValue {
+    #[must_use]
     pub fn from_basic_translate(result: (String, ValueKind)) -> Self {
         TranslatedValue {
             value: result.0,
