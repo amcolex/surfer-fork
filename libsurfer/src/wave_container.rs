@@ -165,6 +165,27 @@ impl VariableRefExt for VariableRef {
         }
     }
 
+    fn from_hierarchy_string_with_id(s: &str, id: VarId) -> Self {
+        let components = s
+            .split('.')
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+
+        if components.is_empty() {
+            Self {
+                path: ScopeRef::empty(),
+                name: String::new(),
+                id,
+            }
+        } else {
+            Self {
+                path: ScopeRef::from_strs(&components[..(components.len()) - 1]),
+                name: components.last().unwrap().to_string(),
+                id,
+            }
+        }
+    }
+
     /// A human readable full path to the scope
     fn full_path_string(&self) -> String {
         if self.path.has_empty_strs() {
@@ -289,12 +310,15 @@ impl WaveContainer {
         }
     }
 
-    /// Return all variables (excluding parameters) in the whole design.
-    pub fn variables(&self, include_parameters: bool) -> Vec<VariableRef> {
+    /// Return an iterator with all variables in the whole design.
+    pub fn variables(
+        &self,
+        include_parameters: bool,
+    ) -> Box<dyn Iterator<Item = VariableRef> + '_> {
         match self {
             WaveContainer::Wellen(f) => f.variables(include_parameters),
-            WaveContainer::Empty => vec![],
-            WaveContainer::Cxxrtl(_) => vec![],
+            WaveContainer::Empty => Box::new(std::iter::empty()),
+            WaveContainer::Cxxrtl(_) => Box::new(std::iter::empty()),
         }
     }
 

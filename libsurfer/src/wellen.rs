@@ -33,6 +33,7 @@ pub struct WellenContainer {
     server: Option<String>,
     scopes: Vec<String>,
     vars: Vec<String>,
+    varrefs: Vec<VariableRef>,
     signals: HashMap<SignalRef, Arc<Signal>>,
     /// keeps track of signals that need to be loaded once the body of the waveform file has been loaded
     signals_to_be_loaded: HashSet<SignalRef>,
@@ -132,6 +133,16 @@ impl WellenContainer {
         let h = &hierarchy;
         let scopes = h.iter_scopes().map(|r| r.full_name(h)).collect::<Vec<_>>();
         let vars: Vec<String> = h.iter_vars().map(|r| r.full_name(h)).collect::<Vec<_>>();
+        let varrefs = vars
+            .iter()
+            .enumerate()
+            .map(|(n, name)| {
+                VariableRef::from_hierarchy_string_with_id(
+                    name,
+                    VarId::Wellen(VarRef::from_index(n).unwrap()),
+                )
+            })
+            .collect::<Vec<_>>();
 
         let unique_id = UNIQUE_ID_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
@@ -140,6 +151,7 @@ impl WellenContainer {
             server,
             scopes,
             vars,
+            varrefs,
             signals: HashMap::new(),
             signals_to_be_loaded: HashSet::new(),
             time_table: Arc::new(vec![]),
@@ -227,17 +239,22 @@ impl WellenContainer {
         }
     }
 
-    pub fn variables(&self, include_parameters: bool) -> Vec<VariableRef> {
-        let h = &self.hierarchy;
+    pub fn variables(
+        &self,
+        include_parameters: bool,
+    ) -> Box<dyn Iterator<Item = VariableRef> + '_> {
         if include_parameters {
-            h.iter_vars()
-                .map(|r| VariableRef::from_hierarchy_string(&r.full_name(h)))
-                .collect::<Vec<_>>()
+            Box::new(self.varrefs.iter().cloned())
         } else {
-            h.iter_vars()
-                .filter(|id| id.var_type() != VarType::Parameter)
-                .map(|r| VariableRef::from_hierarchy_string(&r.full_name(h)))
-                .collect::<Vec<_>>()
+            Box::new(
+                self.varrefs
+                    .iter()
+                    .filter(|id| match self.get_var(id) {
+                        Ok(var) => var.var_type() != VarType::Parameter,
+                        Err(_) => true,
+                    })
+                    .cloned(),
+            )
         }
     }
 
