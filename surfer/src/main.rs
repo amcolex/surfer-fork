@@ -217,7 +217,7 @@ mod main_impl {
                 let sender = state.channels.msg_sender.clone();
                 FileWatcher::new(&path, move || {
                     if let Err(e) = sender.send(Message::SuggestReloadWaveform) {
-                        error!("Message ReloadWaveform did not send:\n{e}")
+                        error!("Message ReloadWaveform did not send:\n{e}");
                     }
                 })
                 .inspect_err(|err| error!("Cannot set up the file watcher:\n{err}"))

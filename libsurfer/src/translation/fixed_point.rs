@@ -50,7 +50,7 @@ pub(crate) fn big_uint_to_ufixed(uint: &BigUint, lg_scaling_factor: i64) -> Stri
 /// where `as_signed()` interprets the `uint` as a signed value using two's complement.
 pub(crate) fn big_uint_to_sfixed(uint: &BigUint, num_bits: u64, lg_scaling_factor: i64) -> String {
     if num_bits == 0 {
-        return "".to_string();
+        return String::new();
     }
     if uint.bit(num_bits - 1) {
         let inverted_uint = (BigUint::one() << num_bits) - uint;

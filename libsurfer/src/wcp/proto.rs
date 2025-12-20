@@ -89,6 +89,7 @@ pub enum WcpSCMessage {
 }
 
 impl WcpSCMessage {
+    #[must_use]
     pub fn create_greeting(version: usize, commands: Vec<String>) -> Self {
         Self::greeting {
             version: version.to_string(),
@@ -96,6 +97,7 @@ impl WcpSCMessage {
         }
     }
 
+    #[must_use]
     pub fn create_error(error: String, arguments: Vec<String>, message: String) -> Self {
         Self::error {
             error,
@@ -220,6 +222,7 @@ pub enum WcpCSMessage {
 }
 
 impl WcpCSMessage {
+    #[must_use]
     pub fn create_greeting(version: usize, commands: Vec<String>) -> Self {
         Self::greeting {
             version: version.to_string(),
