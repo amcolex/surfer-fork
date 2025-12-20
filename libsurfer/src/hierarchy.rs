@@ -152,7 +152,7 @@ impl SystemState {
                                 wave_container,
                                 ui,
                                 &variables,
-                                Some(row_range),
+                                Some(&row_range),
                                 false,
                             );
                         });
@@ -238,7 +238,7 @@ impl SystemState {
                                 wave_container,
                                 ui,
                                 &variables,
-                                Some(row_range),
+                                Some(&row_range),
                                 true,
                             );
                         });
@@ -323,7 +323,7 @@ impl SystemState {
                     .iter()
                     .filter_map(|var| match var {
                         VarType::Variable(var) => Some(var.clone()),
-                        _ => None,
+                        VarType::Generator(_) => None,
                     })
                     .collect_vec();
 
@@ -498,7 +498,7 @@ impl SystemState {
         wave_container: &WaveContainer,
         ui: &mut Ui,
         variables: &[VariableRef],
-        row_range: Option<Range<usize>>,
+        row_range: Option<&Range<usize>>,
     ) {
         let filtered_variables = self.filtered_variables(variables, false);
         self.draw_variable_list(
@@ -517,7 +517,7 @@ impl SystemState {
         wave_container: &WaveContainer,
         ui: &mut Ui,
         variables: &[VariableRef],
-        row_range: Option<Range<usize>>,
+        row_range: Option<&Range<usize>>,
         display_full_path: bool,
     ) {
         // Get iterator with more info about each variable
