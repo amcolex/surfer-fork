@@ -420,7 +420,7 @@ mod tests {
             wellen::SignalRef::from_index(999),
         ]
         .into_iter()
-        .filter_map(|s| s)
+        .flatten()
         .collect();
 
         let url = format_signal_url(base_url, &signals);
