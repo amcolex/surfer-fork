@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 /// a-p. This is nice because it makes for some easily typed ids.
 /// The function first formats the number as a hex digit and then performs
 /// the mapping.
+#[must_use]
 pub fn uint_idx_to_alpha_idx(idx: VisibleItemIndex, nvariables: usize) -> String {
     // this calculates how many hex digits we need to represent nvariables
     // unwrap because the result should always fit into usize and because
@@ -93,6 +94,7 @@ fn get_multi_extension_from_filename(filename: &str) -> Option<String> {
 /// Get the full extension of a path, including all extensions.
 /// For example, for "foo.tar.gz", this function returns "tar.gz", and not just "gz",
 /// like path.extension() would.
+#[must_use]
 pub fn get_multi_extension(path: &Utf8PathBuf) -> Option<String> {
     // Find the first . in the path, if any. Return the rest of the path.
     if let Some(filename) = path.file_name() {

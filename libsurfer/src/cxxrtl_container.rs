@@ -299,14 +299,14 @@ impl CxxrtlContainer {
                     };
                     match msg {
                         SCMessage::greeting { .. } => {
-                            info!("Received cxxrtl greeting")
+                            info!("Received cxxrtl greeting");
                         }
                         SCMessage::response(response) => {
                             if let Some(cb) = self.sending.callback_queue.pop_front() {
-                                cb(response, &mut self.data)
+                                cb(response, &mut self.data);
                             } else {
-                                error!("Got a CXXRTL message with no corresponding callback")
-                            };
+                                error!("Got a CXXRTL message with no corresponding callback");
+                            }
                         }
                         SCMessage::error(e) => {
                             error!("CXXRTL error: '{}'", e.message);
@@ -555,6 +555,7 @@ impl CxxrtlContainer {
             }))
     }
 
+    #[must_use]
     pub fn max_displayed_timestamp(&self) -> Option<CxxrtlTimestamp> {
         self.data.query_result.get().map(|t| (*t).clone())
     }

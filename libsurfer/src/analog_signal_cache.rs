@@ -38,6 +38,7 @@ pub const NAN_UNDEF: f64 = f64::from_bits(0x7FF8_0000_0000_0000_u64);
 pub const NAN_HIGHIMP: f64 = f64::from_bits(0x7FF8_0000_0000_0001_u64);
 
 /// Check NaN payload to determine if it represents HighImp.
+#[must_use]
 pub fn is_nan_highimp(value: f64) -> bool {
     value.to_bits() == NAN_HIGHIMP.to_bits()
 }
@@ -311,6 +312,7 @@ impl AnalogSignalCache {
         })
     }
 
+    #[must_use]
     pub fn query_time_range(&self, start: u64, end: u64) -> Option<(f64, f64)> {
         let result = self.rmq.query_time_range(start, end)?;
         if result.has_non_finite {
@@ -321,6 +323,7 @@ impl AnalogSignalCache {
         }
     }
 
+    #[must_use]
     pub fn query_at_time(&self, time: u64) -> CacheQueryResult {
         self.rmq.query_at_time(time)
     }
@@ -337,6 +340,7 @@ pub struct AnalogCacheEntry {
 }
 
 impl AnalogCacheEntry {
+    #[must_use]
     pub fn new(cache_key: AnalogCacheKey, generation: u64) -> Self {
         Self {
             inner: OnceLock::new(),
