@@ -373,9 +373,8 @@ impl WellenContainer {
             VarId::Wellen(id) => Ok(id),
             VarId::None => {
                 let h = &self.hierarchy;
-                let var = match h.lookup_var(r.path.strs(), &r.name) {
-                    None => bail!("Failed to find variable: {r:?}"),
-                    Some(id) => id,
+                let Some(var) = h.lookup_var(r.path.strs(), &r.name) else {
+                    bail!("Failed to find variable: {r:?}")
                 };
                 Ok(var)
             }
@@ -430,7 +429,7 @@ impl WellenContainer {
         let filtered_ids = ids
             .iter()
             .filter(|id| !self.signals.contains_key(id) && !self.signals_to_be_loaded.contains(id))
-            .cloned()
+            .copied()
             .collect::<Vec<_>>();
 
         // add signals to signals that need to be loaded
@@ -493,12 +492,9 @@ impl WellenContainer {
         let var_ref = self.get_var_ref(variable)?;
         // map variable to variable ref
         let signal_ref = h[var_ref].signal_ref();
-        let sig = match self.signals.get(&signal_ref) {
-            Some(sig) => sig,
-            None => {
-                // if the signal has not been loaded yet, we return an empty result
-                return Ok(None);
-            }
+        let Some(sig) = self.signals.get(&signal_ref) else {
+            // if the signal has not been loaded yet, we return an empty result
+            return Ok(None);
         };
         let time_table = &self.time_table;
 
@@ -606,7 +602,9 @@ impl WellenContainer {
             var: variable.clone(),
             num_bits: var.length(),
             variable_type: Some(VariableType::from_wellen_type(var.var_type())),
-            variable_type_name: var.vhdl_type_name(&self.hierarchy).map(|s| s.to_string()),
+            variable_type_name: var
+                .vhdl_type_name(&self.hierarchy)
+                .map(std::string::ToString::to_string),
             index: var.index().map(VariableIndex::from_wellen_type),
             direction: Some(VariableDirection::from_wellen_direction(var.direction())),
             enum_map: self.get_enum_map(var),

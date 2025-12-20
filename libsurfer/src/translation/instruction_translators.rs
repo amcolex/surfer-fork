@@ -18,7 +18,7 @@ impl BasicTranslator<VarId, ScopeId> for InstructionTranslator {
 
     fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
         let u64_value = match value {
-            VariableValue::BigUint(v) => v.to_u64_digits().last().cloned(),
+            VariableValue::BigUint(v) => v.to_u64_digits().last().copied(),
             VariableValue::String(s) => match check_vector_variable(s) {
                 Some(v) => return v,
                 None => u64::from_str_radix(s, 2).ok(),

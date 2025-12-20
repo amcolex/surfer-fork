@@ -251,7 +251,7 @@ fn decode_lebxxx(value: &num::BigUint) -> Result<num::BigUint, &'static str> {
         _ => (),
     };
 
-    let first: num::BigUint = bytes.first().cloned().unwrap_or(0).into();
+    let first: num::BigUint = bytes.first().copied().unwrap_or(0).into();
     bytes.iter().skip(1).try_fold(first, |result, b| {
         if (b & 0x80 == 0) != (result.is_zero()) {
             Err("invalid flag")

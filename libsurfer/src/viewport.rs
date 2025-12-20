@@ -144,7 +144,7 @@ impl Viewport {
     }
 
     pub fn as_absolute_time(&self, x: f64, view_width: f32, num_timestamps: &BigInt) -> Absolute {
-        let time_spacing = self.width_absolute(num_timestamps) / view_width as f64;
+        let time_spacing = self.width_absolute(num_timestamps) / f64::from(view_width);
 
         self.curr_left.absolute(num_timestamps) + time_spacing * x
     }
@@ -174,7 +174,7 @@ impl Viewport {
         let distance_from_left =
             Absolute(time.to_f64().unwrap()) - self.curr_left.absolute(num_timestamps);
 
-        (((distance_from_left / self.width_absolute(num_timestamps)).0) * (view_width as f64))
+        (((distance_from_left / self.width_absolute(num_timestamps)).0) * f64::from(view_width))
             as f32
     }
 
@@ -186,7 +186,7 @@ impl Viewport {
     ) -> f32 {
         let distance_from_left = time - self.curr_left.absolute(num_timestamps);
 
-        (((distance_from_left / self.width_absolute(num_timestamps)).0) * (view_width as f64))
+        (((distance_from_left / self.width_absolute(num_timestamps)).0) * f64::from(view_width))
             as f32
     }
 
@@ -452,11 +452,11 @@ impl Viewport {
 
                         self.curr_left = Relative(ease_in_out_size(
                             self.move_start_left.0..=self.target_left.0,
-                            (*move_duration as f64) / (*duration as f64),
+                            f64::from(*move_duration) / f64::from(*duration),
                         ));
                         self.curr_right = Relative(ease_in_out_size(
                             self.move_start_right.0..=self.target_right.0,
-                            (*move_duration as f64) / (*duration as f64),
+                            f64::from(*move_duration) / f64::from(*duration),
                         ));
                     }
                 }

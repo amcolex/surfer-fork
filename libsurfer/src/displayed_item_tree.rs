@@ -53,7 +53,7 @@ impl<'a> Iterator for VisibleItemIterator<'a> {
         let this_item = self.items.get(this_idx);
         if this_item.is_some() {
             self.next_idx = next_visible_item(self.items, this_idx);
-        };
+        }
         this_item
     }
 }
@@ -115,8 +115,7 @@ impl<'a> Iterator for VisibleItemIteratorExtraInfo<'a> {
             let has_child = self
                 .items
                 .get(this_idx + 1)
-                .map(|item| item.level > this_level)
-                .unwrap_or(false);
+                .is_some_and(|item| item.level > this_level);
             Some(Info {
                 node: &self.items[this_idx],
                 idx: ItemIndex(this_idx),
@@ -239,8 +238,7 @@ impl DisplayedItemTree {
             .iter()
             .skip(start_idx + 1)
             .enumerate()
-            .filter_map(|(idx, x)| (x.level <= level).then_some(idx + start_idx + 1))
-            .next()
+            .find_map(|(idx, x)| (x.level <= level).then_some(idx + start_idx + 1))
             .unwrap_or(self.items.len())
     }
 
@@ -499,10 +497,13 @@ impl DisplayedItemTree {
             [last] => {
                 0..last
                     .level
-                    .saturating_add(1 + (f(last) && last.unfolded) as u8)
+                    .saturating_add(1 + u8::from(f(last) && last.unfolded))
             }
             [pre, post, ..] => {
-                post.level..pre.level.saturating_add(1 + (f(pre) && pre.unfolded) as u8)
+                post.level
+                    ..pre
+                        .level
+                        .saturating_add(1 + u8::from(f(pre) && pre.unfolded))
             }
         }
     }
@@ -634,9 +635,9 @@ fn shift_subtree_to_level(nodes: &mut [Node], target_level: u8) -> Result<(), Mo
     let Some(from_level) = nodes.first().map(|node| node.level) else {
         return Ok(());
     };
-    let level_corr = (target_level as i16) - (from_level as i16);
+    let level_corr = i16::from(target_level) - i16::from(from_level);
     for elem in nodes.iter_mut() {
-        elem.level = (elem.level as i16 + level_corr)
+        elem.level = (i16::from(elem.level) + level_corr)
             .try_into()
             .map_err(|_| MoveError::InvalidLevel)?;
     }

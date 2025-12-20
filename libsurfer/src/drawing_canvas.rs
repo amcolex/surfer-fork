@@ -53,7 +53,7 @@ impl DinotraceDrawingStyle {
                 if u.is_zero() {
                     DinotraceDrawingStyle::AllZeros
                 } else if let Some(bits) = num_bits {
-                    if u.count_ones() == bits as u64 {
+                    if u.count_ones() == u64::from(bits) {
                         DinotraceDrawingStyle::AllOnes
                     } else {
                         DinotraceDrawingStyle::Normal
@@ -411,7 +411,7 @@ impl SystemState {
             .par_bridge()
             .filter_map(|x| {
                 let time = waves.viewports[viewport_idx]
-                    .as_absolute_time(x as f64, frame_width, &num_timestamps)
+                    .as_absolute_time(f64::from(x), frame_width, &num_timestamps)
                     .0;
                 if time < 0. || time > max_time {
                     None
@@ -832,7 +832,7 @@ impl SystemState {
         {
             // Get background color
             let background_color =
-                &self.get_background_color(waves, drawing_info, drawing_info.vidx(), item_count);
+                self.get_background_color(waves, drawing_info, drawing_info.vidx(), item_count);
 
             self.draw_background(
                 drawing_info,
@@ -993,16 +993,14 @@ impl SystemState {
                         // Get background color and determine best text color
                         let background_color =
                             self.get_background_color(waves, drawing_info, vidx, item_count);
-                        let text_color = self
-                            .user
-                            .config
-                            .theme
-                            .get_best_text_color(&background_color);
-                        let height_scaling_factor = displayed_item
-                            .map(super::displayed_item::DisplayedItem::height_scaling_factor)
-                            .unwrap_or(1.0);
+                        let text_color =
+                            self.user.config.theme.get_best_text_color(background_color);
+                        let height_scaling_factor = displayed_item.map_or(
+                            1.0,
+                            super::displayed_item::DisplayedItem::height_scaling_factor,
+                        );
 
-                        let color = *color.unwrap_or_else(|| {
+                        let color = color.unwrap_or_else(|| {
                             if let Some(DisplayedItem::Variable(variable)) = displayed_item {
                                 waves
                                     .inner
@@ -1011,11 +1009,11 @@ impl SystemState {
                                     .and_then(|meta| meta.variable_type)
                                     .and_then(|var_type| {
                                         (var_type == VariableType::VCDParameter)
-                                            .then_some(&self.user.config.theme.variable_parameter)
+                                            .then_some(self.user.config.theme.variable_parameter)
                                     })
-                                    .unwrap_or(&self.user.config.theme.variable_default)
+                                    .unwrap_or(self.user.config.theme.variable_default)
                             } else {
-                                &self.user.config.theme.variable_default
+                                self.user.config.theme.variable_default
                             }
                         });
                         match commands {
@@ -1043,7 +1041,7 @@ impl SystemState {
                                             y_offset,
                                             height_scaling_factor,
                                             ctx,
-                                            *text_color,
+                                            text_color,
                                         );
                                     }
                                 }
@@ -1069,7 +1067,7 @@ impl SystemState {
                         self.user
                             .config
                             .theme
-                            .get_best_text_color(&self.get_background_color(
+                            .get_best_text_color(self.get_background_color(
                                 waves,
                                 drawing_info,
                                 vidx,
@@ -1149,7 +1147,7 @@ impl SystemState {
             let color = displayed_item
                 .and_then(super::displayed_item::DisplayedItem::color)
                 .and_then(|color| self.user.config.theme.get_color(color));
-            let tx_color = color.unwrap_or(&self.user.config.theme.transaction_default);
+            let tx_color = color.unwrap_or(self.user.config.theme.transaction_default);
             // Draws the surrounding border of the stream
             let border_stroke = Stroke::new(
                 self.user.config.theme.linewidth,
@@ -1215,7 +1213,7 @@ impl SystemState {
                                             255 - tx_color.b(),
                                         )
                                     } else {
-                                        *tx_color
+                                        tx_color
                                     };
 
                                     let stroke =
@@ -1254,7 +1252,7 @@ impl SystemState {
                         self.user
                             .config
                             .theme
-                            .get_best_text_color(&self.get_background_color(
+                            .get_best_text_color(self.get_background_color(
                                 waves,
                                 drawing_info,
                                 vidx,
@@ -1283,11 +1281,11 @@ impl SystemState {
             let path_stroke = PathStroke::from(&ctx.theme.relation_arrow.style);
             let head_stroke = Stroke::from(&ctx.theme.relation_arrow.style);
             for start_pos in inc_relation_starts {
-                self.draw_arrow(start_pos, focused_pos, ctx, &path_stroke, &head_stroke);
+                self.draw_arrow(start_pos, focused_pos, ctx, &path_stroke, head_stroke);
             }
 
             for end_pos in out_relation_starts {
-                self.draw_arrow(focused_pos, end_pos, ctx, &path_stroke, &head_stroke);
+                self.draw_arrow(focused_pos, end_pos, ctx, &path_stroke, head_stroke);
             }
         }
     }
@@ -1476,7 +1474,7 @@ impl SystemState {
         end: Pos2,
         ctx: &DrawingContext,
         path_stroke: &PathStroke,
-        head_stroke: &Stroke,
+        head_stroke: Stroke,
     ) {
         let x_diff = (end.x - start.x).max(100.);
         let scaled_x_diff = 0.4 * x_diff;
@@ -1507,14 +1505,14 @@ impl SystemState {
         vec_start: Pos2,
         vec_tip: Pos2,
         ctx: &DrawingContext,
-        stroke: &Stroke,
+        stroke: Stroke,
     ) {
         let head_length = ctx.theme.relation_arrow.head_length;
 
         let vec_x = vec_tip.x - vec_start.x;
         let vec_y = vec_tip.y - vec_start.y;
 
-        let alpha = 2. * PI / 360. * ctx.theme.relation_arrow.head_angle;
+        let alpha = (2. * PI / 360.) * ctx.theme.relation_arrow.head_angle;
 
         // calculate the points of the new vector, which forms an angle of the given degrees with the given vector
         let vec_angled_x = vec_x * alpha.cos() + vec_y * alpha.sin();
@@ -1532,12 +1530,12 @@ impl SystemState {
 
         ctx.painter.add(Shape::line_segment(
             [vec_tip, Pos2::new(arrowhead_left_x, arrowhead_left_y)],
-            *stroke,
+            stroke,
         ));
 
         ctx.painter.add(Shape::line_segment(
             [vec_tip, Pos2::new(arrowhead_right_x, arrowhead_right_y)],
-            *stroke,
+            stroke,
         ));
     }
 
@@ -1552,7 +1550,7 @@ impl SystemState {
     ) {
         let size = response.rect.size();
         response.context_menu(|ui| {
-            let offset = ui.spacing().menu_margin.left as f32;
+            let offset = f32::from(ui.spacing().menu_margin.left);
             let top_left = to_screen.inverse().transform_rect(ui.min_rect()).left_top()
                 - Pos2 {
                     x: offset,

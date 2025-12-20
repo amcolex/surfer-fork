@@ -177,9 +177,9 @@ pub enum LoadOptions {
     KeepAll,
 }
 
-impl Into<LoadOptions> for (OpenMode, bool) {
-    fn into(self) -> LoadOptions {
-        match self {
+impl From<(OpenMode, bool)> for LoadOptions {
+    fn from(val: (OpenMode, bool)) -> Self {
+        match val {
             (OpenMode::Open, _) => LoadOptions::Clear,
             (OpenMode::Switch, false) => LoadOptions::KeepAvailable,
             (OpenMode::Switch, true) => LoadOptions::KeepAll,

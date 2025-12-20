@@ -391,8 +391,8 @@ impl<'a> CommandBuilder<'a> {
         while px < end {
             // Track if we jumped to this pixel for a specific transition
             let jumped_to_transition = next_query_time.is_some();
-            let t0 = next_query_time.unwrap_or_else(|| self.time_at_pixel(px as f64));
-            let t1 = self.time_at_pixel(px as f64 + 1.0);
+            let t0 = next_query_time.unwrap_or_else(|| self.time_at_pixel(f64::from(px)));
+            let t1 = self.time_at_pixel(f64::from(px) + 1.0);
             next_query_time = None;
 
             // Skip if we already queried this exact time (optimization for zoomed-out views
@@ -461,10 +461,7 @@ impl<'a> CommandBuilder<'a> {
                 // Otherwise t0 is at pixel start, so first transition is at t0_query.next
                 _ => {
                     if let Some(first_change) = t0_query.next {
-                        self.query(first_change)
-                            .current
-                            .map(|(_, v)| v)
-                            .unwrap_or(min)
+                        self.query(first_change).current.map_or(min, |(_, v)| v)
                     } else {
                         min
                     }
@@ -473,7 +470,7 @@ impl<'a> CommandBuilder<'a> {
 
             // Query the value at the end of the range (exit value)
             let exit_query = self.query(t1.saturating_sub(1));
-            let exit_val = exit_query.current.map(|(_, v)| v).unwrap_or(max);
+            let exit_val = exit_query.current.map_or(max, |(_, v)| v);
 
             self.output
                 .emit_range(px as f32, min, max, entry_val, exit_val);
@@ -482,7 +479,7 @@ impl<'a> CommandBuilder<'a> {
 
     /// Extends rendering to include the first sample occurring after the visible viewport.
     fn add_after_viewport_sample(&mut self, end_px: f32) {
-        let query = self.query(self.time_at_pixel(end_px as f64));
+        let query = self.query(self.time_at_pixel(f64::from(end_px)));
 
         let Some(next_time) = query.next else {
             return;

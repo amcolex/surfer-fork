@@ -110,8 +110,7 @@ fn transaction_tooltip_text(waves: &WaveData, tx: &Transaction) -> String {
             .inner
             .as_transactions()
             .and_then(|t| t.get_generator(tx.get_gen_id()))
-            .map(|g| g.name.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
+            .map_or_else(|| "unknown".to_string(), |g| g.name.clone()),
     )
 }
 

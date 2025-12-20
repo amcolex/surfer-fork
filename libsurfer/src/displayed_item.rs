@@ -277,8 +277,7 @@ impl DisplayedMarker {
 
     fn marker_name(&self) -> String {
         self.name
-            .as_ref()
-            .cloned()
+            .clone()
             .unwrap_or_else(|| DEFAULT_MARKER_NAME.to_string())
     }
 }
@@ -394,15 +393,15 @@ impl DisplayedItem {
         }
     }
 
-    pub fn set_color(&mut self, color_name: Option<String>) {
+    pub fn set_color(&mut self, color_name: &Option<String>) {
         match self {
-            DisplayedItem::Variable(variable) => variable.color.clone_from(&color_name),
-            DisplayedItem::Divider(divider) => divider.color.clone_from(&color_name),
-            DisplayedItem::Marker(marker) => marker.color.clone_from(&color_name),
-            DisplayedItem::TimeLine(timeline) => timeline.color.clone_from(&color_name),
-            DisplayedItem::Placeholder(placeholder) => placeholder.color.clone_from(&color_name),
-            DisplayedItem::Stream(stream) => stream.color.clone_from(&color_name),
-            DisplayedItem::Group(group) => group.color.clone_from(&color_name),
+            DisplayedItem::Variable(variable) => variable.color.clone_from(color_name),
+            DisplayedItem::Divider(divider) => divider.color.clone_from(color_name),
+            DisplayedItem::Marker(marker) => marker.color.clone_from(color_name),
+            DisplayedItem::TimeLine(timeline) => timeline.color.clone_from(color_name),
+            DisplayedItem::Placeholder(placeholder) => placeholder.color.clone_from(color_name),
+            DisplayedItem::Stream(stream) => stream.color.clone_from(color_name),
+            DisplayedItem::Group(group) => group.color.clone_from(color_name),
         }
     }
 
@@ -546,28 +545,28 @@ impl DisplayedItem {
         }
     }
 
-    pub fn set_background_color(&mut self, color_name: Option<String>) {
+    pub fn set_background_color(&mut self, color_name: &Option<String>) {
         match self {
             DisplayedItem::Variable(variable) => {
-                variable.background_color.clone_from(&color_name);
+                variable.background_color.clone_from(color_name);
             }
             DisplayedItem::Divider(divider) => {
-                divider.background_color.clone_from(&color_name);
+                divider.background_color.clone_from(color_name);
             }
             DisplayedItem::Marker(marker) => {
-                marker.background_color.clone_from(&color_name);
+                marker.background_color.clone_from(color_name);
             }
             DisplayedItem::TimeLine(timeline) => {
-                timeline.background_color.clone_from(&color_name);
+                timeline.background_color.clone_from(color_name);
             }
             DisplayedItem::Placeholder(placeholder) => {
-                placeholder.background_color.clone_from(&color_name);
+                placeholder.background_color.clone_from(color_name);
             }
             DisplayedItem::Stream(stream) => {
-                stream.background_color.clone_from(&color_name);
+                stream.background_color.clone_from(color_name);
             }
             DisplayedItem::Group(group) => {
-                group.background_color.clone_from(&color_name);
+                group.background_color.clone_from(color_name);
             }
         }
     }
@@ -585,7 +584,7 @@ impl DisplayedItem {
         match self {
             DisplayedItem::Variable(variable) => variable.height_scaling_factor = Some(scale),
             DisplayedItem::Placeholder(placeholder) => {
-                placeholder.height_scaling_factor = Some(scale)
+                placeholder.height_scaling_factor = Some(scale);
             }
             _ => {}
         }

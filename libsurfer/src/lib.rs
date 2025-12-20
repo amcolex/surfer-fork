@@ -350,7 +350,7 @@ impl SystemState {
                 let passed_or_focused = waves.insert_position(waves.focused_item);
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
-                self.add_scope_as_group(scope, target, recursive);
+                self.add_scope_as_group(&scope, target, recursive);
                 self.invalidate_draw_commands();
 
                 self.user.waves.as_mut()?.compute_variable_display_names();
@@ -493,13 +493,11 @@ impl SystemState {
                 let new_focus_vidx = VisibleItemIndex(match direction {
                     MoveDir::Up => waves
                         .focused_item
-                        .map(|vidx| vidx.0)
-                        .unwrap_or(visible_item_cnt)
+                        .map_or(visible_item_cnt, |vidx| vidx.0)
                         .saturating_sub(count),
                     MoveDir::Down => waves
                         .focused_item
-                        .map(|vidx| vidx.0)
-                        .unwrap_or(usize::MAX)
+                        .map_or(usize::MAX, |vidx| vidx.0)
                         .wrapping_add(count)
                         .clamp(0, visible_item_cnt - 1),
                 });
@@ -578,8 +576,9 @@ impl SystemState {
                         waves.and_then(|waves| waves.displayed_items.get(&item_ref))
                     })
                     .map(displayed_item::DisplayedItem::name)
-                    .map(|name| format!("Remove item {name}"))
-                    .unwrap_or("Remove one item".to_string());
+                    .map_or("Remove one item".to_string(), |name| {
+                        format!("Remove item {name}")
+                    });
                 self.save_current_canvas(undo_msg);
                 if let Some(waves) = self.user.waves.as_mut()
                     && let Some(item_ref) = item_ref
@@ -635,7 +634,8 @@ impl SystemState {
                 viewport_idx,
             } => {
                 let waves = self.user.waves.as_mut()?;
-                waves.viewports[viewport_idx].handle_canvas_scroll(delta.y as f64 + delta.x as f64);
+                waves.viewports[viewport_idx]
+                    .handle_canvas_scroll(f64::from(delta.y) + f64::from(delta.x));
                 self.invalidate_draw_commands();
             }
             Message::CanvasZoom {
@@ -647,7 +647,7 @@ impl SystemState {
                 if let Some(num_timestamps) = waves.num_timestamps() {
                     waves.viewports[viewport_idx].handle_canvas_zoom(
                         mouse_ptr,
-                        delta as f64,
+                        f64::from(delta),
                         &num_timestamps,
                     );
                     self.invalidate_draw_commands();
@@ -815,7 +815,7 @@ impl SystemState {
                         waves
                             .displayed_items
                             .entry(node.item_ref)
-                            .and_modify(|item| item.set_color(color_name.clone()));
+                            .and_modify(|item| item.set_color(&color_name));
                     }
                     MessageTarget::CurrentSelection => {
                         if let Some(focused) = waves.focused_item {
@@ -823,14 +823,14 @@ impl SystemState {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_color(color_name.clone()));
+                                .and_modify(|item| item.set_color(&color_name));
                         }
 
                         for node in waves.items_tree.iter_visible_selected() {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_color(color_name.clone()));
+                                .and_modify(|item| item.set_color(&color_name));
                         }
                     }
                 }
@@ -861,7 +861,7 @@ impl SystemState {
                         waves
                             .displayed_items
                             .entry(node.item_ref)
-                            .and_modify(|item| item.set_background_color(color_name.clone()));
+                            .and_modify(|item| item.set_background_color(&color_name));
                     }
                     MessageTarget::CurrentSelection => {
                         if let Some(focused) = waves.focused_item {
@@ -869,14 +869,14 @@ impl SystemState {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_background_color(color_name.clone()));
+                                .and_modify(|item| item.set_background_color(&color_name));
                         }
 
                         for node in waves.items_tree.iter_visible_selected() {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_background_color(color_name.clone()));
+                                .and_modify(|item| item.set_background_color(&color_name));
                         }
                     }
                 }
@@ -1019,20 +1019,22 @@ impl SystemState {
                         .iter()
                         .enumerate()
                         .find(|(_, tx)| **tx == focused_tx.id)
-                        .map(|(vec_idx, _)| {
-                            if next {
-                                if vec_idx + 1 < transactions.len() {
-                                    vec_idx + 1
+                        .map_or(
+                            if next { transactions.len() - 1 } else { 0 },
+                            |(vec_idx, _)| {
+                                if next {
+                                    if vec_idx + 1 < transactions.len() {
+                                        vec_idx + 1
+                                    } else {
+                                        transactions.len() - 1
+                                    }
+                                } else if vec_idx as i32 - 1 > 0 {
+                                    vec_idx - 1
                                 } else {
-                                    transactions.len() - 1
+                                    0
                                 }
-                            } else if vec_idx as i32 - 1 > 0 {
-                                vec_idx - 1
-                            } else {
-                                0
-                            }
-                        })
-                        .unwrap_or(if next { transactions.len() - 1 } else { 0 });
+                            },
+                        );
                     Some(TransactionRef {
                         id: *transactions.get(next_id).unwrap(),
                     })
@@ -2068,9 +2070,8 @@ impl SystemState {
 
                 // Check if already have valid entry (building or ready)
                 let item = waves.displayed_items.get(&display_id)?;
-                let var = match item {
-                    DisplayedItem::Variable(v) => v,
-                    _ => return None,
+                let DisplayedItem::Variable(var) = item else {
+                    return None;
                 };
                 if var
                     .analog
@@ -2212,7 +2213,7 @@ impl SystemState {
 
     pub fn add_scope_as_group(
         &mut self,
-        scope: ScopeRef,
+        scope: &ScopeRef,
         pos: TargetPosition,
         recursive: bool,
     ) -> TargetPosition {
@@ -2224,12 +2225,12 @@ impl SystemState {
         };
 
         let variables = container
-            .variables_in_scope(&scope)
+            .variables_in_scope(scope)
             .iter()
             .sorted_by(|a, b| numeric_sort::cmp(&a.name, &b.name))
             .cloned()
             .collect_vec();
-        let child_scopes = container.child_scopes(&scope);
+        let child_scopes = container.child_scopes(scope);
 
         waves.add_group(scope.name(), Some(pos));
         let into_group_pos = TargetPosition {
@@ -2255,7 +2256,7 @@ impl SystemState {
 
         if recursive {
             for child in child_scopes.unwrap_or(vec![]) {
-                into_group_pos = self.add_scope_as_group(child, into_group_pos, recursive);
+                into_group_pos = self.add_scope_as_group(&child, into_group_pos, recursive);
                 into_group_pos.level = pos.level + 1;
             }
         }
@@ -2309,8 +2310,7 @@ pub fn dump_tree(waves: &WaveData) {
             &waves
                 .displayed_items
                 .get(&node.item_ref)
-                .map(|item| item.name())
-                .unwrap_or("?".to_owned()),
+                .map_or("?".to_owned(), displayed_item::DisplayedItem::name),
         );
         result.push_str(&format!("   ({:?})", node.item_ref));
         if node.selected {

@@ -178,8 +178,7 @@ fn handle_non_terminal_fuzz<T>(
         let best_expansion = {
             let expansion = expanded_commands
                 .first()
-                .map(|(query, _)| query)
-                .unwrap_or(&current_section);
+                .map_or(&current_section, |(query, _)| query);
 
             parser(expansion, rest_query.clone().into()).map(|command| (expansion, command))
         };

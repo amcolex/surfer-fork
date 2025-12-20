@@ -177,9 +177,8 @@ pub fn draw_transaction_variable_list(
     ui: &mut Ui,
     active_stream: &StreamScopeRef,
 ) {
-    let inner = match streams.inner.as_transactions() {
-        Some(tx) => tx,
-        None => return,
+    let Some(inner) = streams.inner.as_transactions() else {
+        return;
     };
     match active_stream {
         StreamScopeRef::Root => {
