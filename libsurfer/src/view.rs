@@ -858,7 +858,7 @@ impl SystemState {
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         ctx: &egui::Context,
-        meta: &Option<VariableMeta>,
+        meta: Option<&VariableMeta>,
     ) -> egui::Response {
         let mut variable_label = self.draw_item_label(
             vidx,
@@ -875,16 +875,14 @@ impl SystemState {
             variable_label = variable_label.on_hover_ui(|ui| {
                 let tooltip = if self.user.waves.is_some() {
                     if field.field.is_empty() {
-                        variable_tooltip_text(
-                            meta.clone()
-                                .or_else(|| {
-                                    let wave_container =
-                                        self.user.waves.as_ref().unwrap().inner.as_waves().unwrap();
-                                    wave_container.variable_meta(&field.root).ok()
-                                })
-                                .as_ref(),
-                            &field.root,
-                        )
+                        if let Some(meta) = meta {
+                            variable_tooltip_text(Some(meta), &field.root)
+                        } else {
+                            let wave_container =
+                                self.user.waves.as_ref().unwrap().inner.as_waves().unwrap();
+                            let meta = wave_container.variable_meta(&field.root).ok();
+                            variable_tooltip_text(meta.as_ref(), &field.root)
+                        }
                     } else {
                         "From translator".to_string()
                     }
@@ -945,7 +943,7 @@ impl SystemState {
                                             msgs,
                                             ui,
                                             ctx,
-                                            &None,
+                                            None,
                                         )
                                     },
                                 );
@@ -1000,7 +998,7 @@ impl SystemState {
                             msgs,
                             ui,
                             ctx,
-                            &None,
+                            None,
                         )
                     })
                     .inner;
@@ -1117,7 +1115,7 @@ impl SystemState {
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         ctx: &egui::Context,
-        meta: &Option<VariableMeta>,
+        meta: Option<&VariableMeta>,
     ) -> egui::Response {
         let text_color = {
             let style = ui.style_mut();
@@ -1254,7 +1252,7 @@ impl SystemState {
             msgs,
             ui,
             ctx,
-            &None,
+            None,
         );
 
         self.draw_drag_source(msgs, vidx, &label, ui.ctx().input(|e| e.modifiers));
@@ -1581,7 +1579,7 @@ impl SystemState {
     pub fn get_variable_name_info(
         &self,
         var: &VariableRef,
-        meta: &Option<VariableMeta>,
+        meta: Option<&VariableMeta>,
     ) -> Option<VariableNameInfo> {
         self.variable_name_info_cache
             .borrow_mut()
