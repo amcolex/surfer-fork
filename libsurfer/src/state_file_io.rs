@@ -151,7 +151,6 @@ impl SystemState {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn encode_state(&self) -> Option<String> {
         let opt = ron::Options::default();
 
@@ -161,7 +160,6 @@ impl SystemState {
             .ok()
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn load_state_from_bytes(&mut self, bytes: Vec<u8>) {
         match ron::de::from_bytes(&bytes).context("Failed loading state from bytes") {
             Ok(s) => {
