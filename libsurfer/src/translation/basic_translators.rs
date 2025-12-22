@@ -32,7 +32,7 @@ pub fn group_n_chars(s: &str, n: usize) -> Vec<&str> {
 
 /// Number of digits for `digit_size`, simply `ceil(num_bits/digit_size)`
 #[must_use]
-pub fn no_of_digits(num_bits: u64, digit_size: u64) -> usize {
+pub fn no_of_digits(num_bits: u32, digit_size: u32) -> usize {
     if num_bits.is_multiple_of(digit_size) {
         (num_bits / digit_size) as usize
     } else {
@@ -41,7 +41,7 @@ pub fn no_of_digits(num_bits: u64, digit_size: u64) -> usize {
 }
 
 /// Map to radix-based representation, in practice hex or octal
-fn map_to_radix(s: &str, radix: usize, num_bits: u64) -> (String, ValueKind) {
+fn map_to_radix(s: &str, radix: usize, num_bits: u32) -> (String, ValueKind) {
     let mut had_invalid_digit = false;
     let formatted = group_n_chars(
         &format!("{extra_bits}{s}", extra_bits = extend_string(s, num_bits)),
@@ -97,7 +97,7 @@ impl BasicTranslator<VarId, ScopeId> for HexTranslator {
         String::from("Hexadecimal")
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => (
                 format!("{v:0width$x}", width = no_of_digits(num_bits, 4)),
@@ -115,7 +115,7 @@ impl BasicTranslator<VarId, ScopeId> for BitTranslator {
         String::from("Bit")
     }
 
-    fn basic_translate(&self, _num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => (
                 if (*v).is_zero() {
@@ -155,7 +155,7 @@ impl BasicTranslator<VarId, ScopeId> for OctalTranslator {
         String::from("Octal")
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => (
                 format!("{v:0width$o}", width = no_of_digits(num_bits, 3)),
@@ -173,7 +173,7 @@ impl BasicTranslator<VarId, ScopeId> for GroupingBinaryTranslator {
         String::from("Binary (with groups)")
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         let (val, color) = match value {
             VariableValue::BigUint(v) => (
                 format!("{v:0width$b}", width = num_bits as usize),
@@ -196,7 +196,7 @@ impl BasicTranslator<VarId, ScopeId> for BinaryTranslator {
         String::from("Binary")
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => (
                 format!("{v:0width$b}", width = num_bits as usize),
@@ -217,7 +217,7 @@ impl BasicTranslator<VarId, ScopeId> for ASCIITranslator {
         String::from("ASCII")
     }
 
-    fn basic_translate(&self, _num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => (
                 v.to_bytes_be()
@@ -271,7 +271,7 @@ impl BasicTranslator<VarId, ScopeId> for LebTranslator {
         "LEBxxx".to_string()
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         let decoded = match value {
             VariableValue::BigUint(v) => decode_lebxxx(v),
             VariableValue::String(s) => match check_vector_variable(s) {
@@ -308,7 +308,7 @@ impl BasicTranslator<VarId, ScopeId> for NumberOfOnesTranslator {
         String::from("Number of ones")
     }
 
-    fn basic_translate(&self, _num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => {
                 (format!("{ones}", ones = v.count_ones()), ValueKind::Normal)
@@ -328,7 +328,7 @@ impl BasicTranslator<VarId, ScopeId> for TrailingOnesTranslator {
         String::from("Trailing ones")
     }
 
-    fn basic_translate(&self, _num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => (
                 format!("{ones}", ones = v.trailing_ones()),
@@ -352,10 +352,13 @@ impl BasicTranslator<VarId, ScopeId> for TrailingZerosTranslator {
         String::from("Trailing zeros")
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => (
-                format!("{ones}", ones = v.trailing_zeros().unwrap_or(num_bits)),
+                format!(
+                    "{ones}",
+                    ones = v.trailing_zeros().unwrap_or(u64::from(num_bits))
+                ),
                 ValueKind::Normal,
             ),
             VariableValue::String(s) => (
@@ -380,7 +383,7 @@ impl BasicTranslator<VarId, ScopeId> for LeadingOnesTranslator {
         String::from("Leading ones")
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => {
                 let s = format!("{v:0width$b}", width = num_bits as usize);
@@ -408,7 +411,7 @@ impl BasicTranslator<VarId, ScopeId> for LeadingZerosTranslator {
         String::from("Leading zeros")
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => {
                 let s = format!("{v:0width$b}", width = num_bits as usize);
@@ -435,7 +438,7 @@ impl BasicTranslator<VarId, ScopeId> for IdenticalMSBsTranslator {
         String::from("Identical MSBs")
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         match value {
             VariableValue::BigUint(v) => {
                 let s = format!("{v:0width$b}", width = num_bits as usize);

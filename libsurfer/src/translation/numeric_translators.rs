@@ -68,7 +68,7 @@ impl BasicTranslator<VarId, ScopeId> for UnsignedTranslator {
         String::from("Unsigned")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(|v| format!("{v}"), v)
     }
 
@@ -88,7 +88,7 @@ impl BasicTranslator<VarId, ScopeId> for SignedTranslator {
         String::from("Signed")
     }
 
-    fn basic_translate(&self, num_bits: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(|val| compute_signed_value(&val, num_bits), v)
     }
 
@@ -104,7 +104,7 @@ impl BasicTranslator<VarId, ScopeId> for SignedTranslator {
 }
 
 /// Computes the signed value string for a given `BigUint` and bit width.
-fn compute_signed_value(v: &BigUint, num_bits: u64) -> String {
+fn compute_signed_value(v: &BigUint, num_bits: u32) -> String {
     let signweight = BigUint::one() << (num_bits - 1);
     if v < &signweight {
         format!("{v}")
@@ -121,7 +121,7 @@ impl BasicTranslator<VarId, ScopeId> for SinglePrecisionTranslator {
         String::from("FP: 32-bit IEEE 754")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 shortest_float_representation(f32::from_bits(
@@ -143,7 +143,7 @@ impl BasicTranslator<VarId, ScopeId> for DoublePrecisionTranslator {
     fn name(&self) -> String {
         String::from("FP: 64-bit IEEE 754")
     }
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 shortest_float_representation(f64::from_bits(
@@ -166,7 +166,7 @@ impl BasicTranslator<VarId, ScopeId> for QuadPrecisionTranslator {
     fn name(&self) -> String {
         String::from("FP: 128-bit IEEE 754")
     }
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 let mut digits = v.iter_u64_digits();
@@ -193,7 +193,7 @@ impl BasicTranslator<VarId, ScopeId> for HalfPrecisionTranslator {
     fn name(&self) -> String {
         String::from("FP: 16-bit IEEE 754")
     }
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 shortest_float_representation(f16::from_bits(
@@ -214,7 +214,7 @@ impl BasicTranslator<VarId, ScopeId> for BFloat16Translator {
     fn name(&self) -> String {
         String::from("FP: bfloat16")
     }
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 shortest_float_representation(bf16::from_bits(
@@ -236,7 +236,7 @@ impl BasicTranslator<VarId, ScopeId> for Posit32Translator {
         String::from("Posit: 32-bit (two exponent bits)")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 format!(
@@ -260,7 +260,7 @@ impl BasicTranslator<VarId, ScopeId> for Posit16Translator {
         String::from("Posit: 16-bit (one exponent bit)")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 format!(
@@ -284,7 +284,7 @@ impl BasicTranslator<VarId, ScopeId> for Posit8Translator {
         String::from("Posit: 8-bit (no exponent bit)")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 format!(
@@ -308,7 +308,7 @@ impl BasicTranslator<VarId, ScopeId> for PositQuire8Translator {
         String::from("Posit: quire for 8-bit (no exponent bit)")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 format!(
@@ -332,7 +332,7 @@ impl BasicTranslator<VarId, ScopeId> for PositQuire16Translator {
         String::from("Posit: quire for 16-bit (one exponent bit)")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| {
                 let mut digits = v.iter_u64_digits();
@@ -386,7 +386,7 @@ impl BasicTranslator<VarId, ScopeId> for E5M2Translator {
         String::from("FP: 8-bit (E5M2)")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| decode_e5m2(v.iter_u32_digits().next().unwrap_or(0) as u8),
             v,
@@ -426,7 +426,7 @@ impl BasicTranslator<VarId, ScopeId> for E4M3Translator {
         String::from("FP: 8-bit (E4M3)")
     }
 
-    fn basic_translate(&self, _: u64, v: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, _: u32, v: &VariableValue) -> (String, ValueKind) {
         translate_numeric(
             |v| decode_e4m3(v.iter_u32_digits().next().unwrap_or(0) as u8),
             v,
