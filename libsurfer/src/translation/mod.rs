@@ -16,6 +16,7 @@ pub mod clock;
 mod color_translators;
 mod enum_translator;
 mod fixed_point;
+mod floating_point;
 mod instruction_translators;
 pub mod numeric_translators;
 #[cfg(feature = "python")]
