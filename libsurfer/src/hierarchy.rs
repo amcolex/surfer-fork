@@ -387,8 +387,25 @@ impl SystemState {
         if child_scopes.is_empty() && no_variables_in_scope && !self.show_empty_scopes() {
             return;
         }
+
         if child_scopes.is_empty() && (!draw_variables || no_variables_in_scope) {
-            self.add_scope_selectable_label(msgs, wave, scope, ui, false);
+            // Use a header so that indentation is correct, but overwrite the
+            // icon to be empty. Since `show_header` always paints the default icon,
+            // we need to paint the headline ourselves.
+            let mut static_header =
+                egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    egui::Id::new(scope),
+                    false,
+                );
+            static_header.set_open(false);
+            ui.horizontal(|ui| {
+                let prev_item_spacing = ui.spacing_mut().item_spacing;
+                ui.spacing_mut().item_spacing.x = 0.0; // the toggler button includes spacing
+                static_header.show_toggle_button(ui, |_ui, _openness, _response| {});
+                ui.spacing_mut().item_spacing = prev_item_spacing;
+                self.add_scope_selectable_label(msgs, wave, scope, ui, false);
+            });
         } else {
             let should_open_header = self.should_open_header(scope);
             let mut collapsing_header =
@@ -423,14 +440,14 @@ impl SystemState {
                         if !parameters.is_empty() {
                             egui::collapsing_header::CollapsingState::load_with_default_open(
                                 ui.ctx(),
-                                egui::Id::new(&parameters),
+                                egui::Id::new(&scope).with("__surfer_parameters"),
                                 false,
                             )
                             .show_header(ui, |ui| {
                                 ui.with_layout(
                                     Layout::top_down(Align::LEFT).with_cross_justify(true),
                                     |ui| {
-                                        ui.label("Parameters");
+                                        ui.add(egui::Button::selectable(false, "Parameters"));
                                     },
                                 );
                             })
