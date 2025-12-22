@@ -51,7 +51,7 @@ fn translate_with_basic(
     variable: &VariableMeta,
     value: &VariableValue,
 ) -> Result<TranslationResult> {
-    let (val, kind) = t.basic_translate(u64::from(variable.num_bits.unwrap_or(0)), value);
+    let (val, kind) = t.basic_translate(variable.num_bits.unwrap_or(0), value);
     Ok(TranslationResult {
         val: ValueRepr::String(val),
         kind,
