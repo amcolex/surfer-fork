@@ -150,10 +150,10 @@ impl SystemState {
 
         match args.waves {
             Some(WaveSource::Url(url)) => {
-                self.add_batch_message(Message::LoadWaveformFileFromUrl(url, LoadOptions::KeepAll));
+                self.add_batch_message(Message::LoadWaveformFileFromUrl(url, LoadOptions::Clear));
             }
             Some(WaveSource::File(file)) => {
-                self.add_batch_message(Message::LoadFile(file, LoadOptions::KeepAll));
+                self.add_batch_message(Message::LoadFile(file, LoadOptions::Clear));
             }
             Some(WaveSource::Data) => error!("Attempted to load data at startup"),
             Some(WaveSource::Cxxrtl(url)) => {
