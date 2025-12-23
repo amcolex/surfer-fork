@@ -141,7 +141,7 @@ pub enum Message {
     /// Set cursor at time.
     CursorSet(BigInt),
     #[serde(skip)]
-    SurferServerStatus(web_time::Instant, String, SurverStatus),
+    SetSurverStatus(web_time::Instant, String, SurverStatus),
     /// Load file from file path.
     LoadFile(Utf8PathBuf, LoadOptions),
     /// Load file from URL.
@@ -261,8 +261,9 @@ pub enum Message {
     SetTickLines(bool),
     SetVariableTooltip(bool),
     SetScopeTooltip(bool),
-    SetServerFileWindowVisible(bool),
-    LoadAndSetSurverFileIndex(Option<usize>, LoadOptions),
+    SetSurverFileWindowVisible(bool),
+    LoadSurverFileByIndex(Option<usize>, LoadOptions),
+    LoadSurverFileByName(String, LoadOptions),
     SetTransitionValue(TransitionValue),
     ToggleFullscreen,
     StopProgressTracker,
