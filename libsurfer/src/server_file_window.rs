@@ -118,5 +118,6 @@ impl SystemState {
         if !open {
             msgs.push(Message::SetSurverFileWindowVisible(false));
         }
+        *self.surver_load_options.borrow_mut() = load_options;
     }
 }
