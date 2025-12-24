@@ -6,9 +6,6 @@ use crate::time::{time_string, timeunit_menu};
 use crate::wave_source::draw_progress_information;
 use crate::{SystemState, message::Message, wave_data::WaveData};
 
-/// Spacing between status bar elements (in pixels)
-const STATUS_SPACING: f32 = 10.0;
-
 /// Debounce duration for progress information display (in milliseconds)
 /// Progress is only shown after this duration to avoid flicker on fast operations
 const PROGRESS_DEBOUNCE_MS: u64 = 100;
@@ -49,21 +46,30 @@ impl SystemState {
     fn draw_statusbar_left(&self, ui: &mut Ui, waves: Option<&WaveData>) {
         if let Some(waves) = waves {
             ui.label(waves.source.to_string());
+            if let Some(idx) = self.user.selected_server_file_index {
+                self.user.surver_file_infos.as_ref().map(|infos| {
+                    infos.get(idx).map_or((), |file| {
+                        ui.separator();
+                        ui.label(&file.filename);
+                    })
+                });
+            }
             if let Some(datetime) = waves.inner.metadata().date {
-                ui.add_space(STATUS_SPACING);
+                ui.separator();
                 ui.label(format!("Generated: {datetime}"));
             }
         }
 
         if let Some(state_file) = &self.user.state_file {
-            ui.label(format!(" | {}", state_file.to_string_lossy()));
+            ui.separator();
+            ui.label(state_file.to_string_lossy());
         }
 
-        ui.add_space(STATUS_SPACING);
         if let Some(progress_data) = &self.progress_tracker
             && Instant::now().duration_since(progress_data.started)
                 > Duration::from_millis(PROGRESS_DEBOUNCE_MS)
         {
+            ui.separator();
             draw_progress_information(ui, progress_data);
         }
 
@@ -71,7 +77,7 @@ impl SystemState {
         if let Some(waves) = waves {
             let in_progress_count = waves.inflight_caches.len();
             if in_progress_count > 0 {
-                ui.add_space(STATUS_SPACING);
+                ui.separator();
                 ui.spinner();
                 if in_progress_count == 1 {
                     ui.label("Building analog cache…");
@@ -94,15 +100,14 @@ impl SystemState {
                         &self.get_time_format(),
                     ))
                     .context_menu(|ui| timeunit_menu(ui, msgs, &self.user.wanted_timeunit));
-                    ui.add_space(STATUS_SPACING);
                 }
                 if let Some(undo_op) = &self.undo_stack.last() {
+                    ui.separator();
                     ui.label(format!("Undo: {}", undo_op.message));
-                    ui.add_space(STATUS_SPACING);
                 }
                 if let Some(count) = &self.user.count {
+                    ui.separator();
                     ui.label(format!("Count: {count}"));
-                    ui.add_space(STATUS_SPACING);
                 }
             });
         }
