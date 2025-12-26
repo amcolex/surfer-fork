@@ -334,7 +334,7 @@ fn find_user_mnemonic_translators_at_path(path: &Path) -> Vec<Arc<DynBasicTransl
             Ok(translator) => {
                 tracing::info!(
                     "Loaded {:?}-bit(s) mnemonic translator: {}",
-                    &translator.map.bits,
+                    translator.bits(),
                     translator.name(),
                 );
                 mnemonic_translators.push(Arc::new(translator));
