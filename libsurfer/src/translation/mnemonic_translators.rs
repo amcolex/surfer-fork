@@ -1,10 +1,12 @@
 use camino::Utf8Path;
 use ecolor::Color32;
+use num::BigUint;
 use std::collections::HashMap;
 use std::fs;
 use std::sync::OnceLock;
 use surfer_translation_types::{
-    BasicTranslator, TranslationPreference, ValueKind, VariableValue, extend_string, kind_for_binary_representation
+    BasicTranslator, TranslationPreference, ValueKind, VariableValue, extend_string,
+    kind_for_binary_representation,
 };
 use thiserror::Error;
 
@@ -65,8 +67,8 @@ pub struct MnemonicEntry {
 #[derive(Debug, Clone)]
 pub struct MnemonicMap {
     pub name: Option<String>,
-    pub bits: u64,
-    pub entries: HashMap<String, MnemonicEntry>,
+    pub bits: u32,
+    pub entries: HashMap<VariableValue, MnemonicEntry>,
 }
 
 pub struct MnemonicTranslator {
@@ -87,6 +89,9 @@ pub enum MnemonicParseError {
     #[error("Invalid hex number: {0}")]
     InvalidHex(String),
 
+    #[error("Invalid octal number: {0}")]
+    InvalidOctal(String),
+
     #[error("Unknown kind/color: {0}")]
     UnknownKindColor(String),
 
@@ -95,15 +100,17 @@ pub enum MnemonicParseError {
     )]
     BinaryTooWide {
         value: String,
-        required: usize,
-        specified: usize,
+        required: u32,
+        specified: u32,
     },
 
-    #[error("String '{value}' has {value_len} characters, expected {expected} characters to match bit width")]
+    #[error(
+        "String '{value}' has {value_len} characters, expected {expected} characters to match bit width"
+    )]
     StringLengthMismatch {
         value: String,
-        value_len: usize,
-        expected: usize,
+        value_len: u32,
+        expected: u32,
     },
 
     #[error("Missing mnemonic")]
@@ -137,6 +144,10 @@ impl BasicTranslator<VarId, ScopeId> for MnemonicTranslator {
     }
 
     fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
+        if let Some(entry) = self.map.entries.get(value) {
+            return (entry.label.clone(), entry.kind);
+        }
+
         let var_string = match value {
             VariableValue::BigUint(v) => format!("{v:0width$b}", width = num_bits as usize),
             VariableValue::String(s) => {
@@ -144,12 +155,8 @@ impl BasicTranslator<VarId, ScopeId> for MnemonicTranslator {
             }
         };
 
-        if let Some(entry) = self.map.entries.get(&var_string) {
-            (entry.label.clone(), entry.kind)
-        } else {
-            let val_kind = kind_for_binary_representation(&var_string);
-            (var_string, val_kind)
-        }
+        let val_kind = kind_for_binary_representation(&var_string);
+        (var_string, val_kind)
     }
 
     fn translates(&self, variable: &VariableMeta) -> eyre::Result<TranslationPreference> {
@@ -185,11 +192,10 @@ pub fn parse_content_with_default_name(
 
     // Process all lines using iterator
     for (line_num, line_str) in lines_iter {
-        let trimmed = line_str.trim();
-        let processed = strip_inline_comment(trimmed).trim();
+        let processed = line_str.trim();
 
-        // Skip empty lines and comments
-        if processed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with('#') {
+        // Skip empty lines and comments (only lines starting with '#')
+        if processed.is_empty() || processed.starts_with('#') {
             continue;
         }
 
@@ -198,7 +204,7 @@ pub fn parse_content_with_default_name(
             if name.is_some() {
                 return Err(MnemonicParseError::LineError {
                     line: line_num + 1,
-                    content: trimmed.to_string(),
+                    content: line_str.to_string(),
                     message: "Multiple Name specifiers found".to_string(),
                 });
             }
@@ -211,7 +217,7 @@ pub fn parse_content_with_default_name(
             if bits.is_some() {
                 return Err(MnemonicParseError::LineError {
                     line: line_num + 1,
-                    content: trimmed.to_string(),
+                    content: line_str.to_string(),
                     message: "Multiple Bits specifiers found".to_string(),
                 });
             }
@@ -224,43 +230,34 @@ pub fn parse_content_with_default_name(
             Err(e) => {
                 return Err(MnemonicParseError::LineError {
                     line: line_num + 1,
-                    content: trimmed.to_string(),
+                    content: line_str.to_string(),
                     message: e.to_string(),
-                })
+                });
             }
         }
     }
 
     // Determine bit width if not provided
     let bit_width = if let Some(b) = bits {
-        b as usize
+        b
     } else {
         // Find the longest bit string
-        raw_entries
-            .iter()
-            .map(|entry| entry.0.len())
-            .max()
-            .unwrap_or(0)
+        raw_entries.iter().map(|entry| entry.3).max().unwrap_or(0)
     };
 
     // Validate and normalize all entries, building HashMap
     let mut entries = HashMap::new();
-    for (first, second, color) in raw_entries {
-        let normalized_first = normalize_first_column(&first, bit_width)?;
-        if entries.contains_key(&normalized_first) {
+    for (value, label, kind, value_len) in raw_entries {
+        let key = normalize_first_column(&value, value_len, bit_width)?;
+
+        if entries.contains_key(&key) {
             tracing::warn!(
                 "Duplicate mnemonic key '{}' encountered; keeping first occurrence",
-                normalized_first
+                key_display(&key, bit_width)
             );
             continue;
         }
-        entries.insert(
-            normalized_first,
-            MnemonicEntry {
-                label: second,
-                kind: color,
-            },
-        );
+        entries.insert(key, MnemonicEntry { label, kind });
     }
 
     // Use default_name if no name was found in the file
@@ -268,7 +265,7 @@ pub fn parse_content_with_default_name(
 
     Ok(MnemonicMap {
         name: final_name,
-        bits: bit_width as u64,
+        bits: bit_width,
         entries,
     })
 }
@@ -285,82 +282,167 @@ fn parse_bits_line(line: &str) -> Result<u32, MnemonicParseError> {
         .map_err(|_| MnemonicParseError::InvalidBitsValue(bits_str.to_string()))
 }
 
-fn normalize_first_column(first: &str, bit_width: usize) -> Result<String, MnemonicParseError> {
-    // Check if the first column contains only '0' and '1' (binary string)
-    let is_binary = first.chars().all(|c| c == '0' || c == '1');
+fn normalize_first_column(
+    value: &VariableValue,
+    value_len: u32,
+    bit_width: u32,
+) -> Result<VariableValue, MnemonicParseError> {
+    match value {
+        VariableValue::BigUint(v) => {
+            if value_len > bit_width {
+                return Err(MnemonicParseError::BinaryTooWide {
+                    value: format!("{v:0width$b}", width = value_len as usize),
+                    required: value_len,
+                    specified: bit_width,
+                });
+            }
+            Ok(VariableValue::BigUint(v.clone()))
+        }
+        VariableValue::String(s) => {
+            // Check if the first column contains only '0' and '1' (binary string)
+            if s.chars().all(|c| c == '0' || c == '1') {
+                if value_len > bit_width {
+                    return Err(MnemonicParseError::BinaryTooWide {
+                        value: s.to_string(),
+                        required: value_len,
+                        specified: bit_width,
+                    });
+                }
 
-    if is_binary {
-        // Pad binary string to match bit_width
-        let padded = pad_binary_string(first, bit_width);
-        if padded.len() > bit_width {
-            return Err(MnemonicParseError::BinaryTooWide {
-                value: first.to_string(),
-                required: padded.len(),
-                specified: bit_width,
-            });
+                let value = BigUint::parse_bytes(s.as_bytes(), 2)
+                    .expect("binary string should parse as BigUint");
+                Ok(VariableValue::BigUint(value))
+            } else {
+                // Regular string: allow extension up to bit width
+                if s.len() > bit_width as usize {
+                    return Err(MnemonicParseError::StringLengthMismatch {
+                        value: s.to_string(),
+                        value_len: s.len() as u32,
+                        expected: bit_width,
+                    });
+                }
+
+                let lower = s.to_lowercase();
+                let extended = format!(
+                    "{extra}{body}",
+                    extra = extend_string(&lower, bit_width as u32),
+                    body = lower
+                );
+                Ok(VariableValue::String(extended))
+            }
         }
-        Ok(padded)
-    } else {
-        // Regular string, validate it matches bit_width
-        if first.len() != bit_width {
-            return Err(MnemonicParseError::StringLengthMismatch {
-                value: first.to_string(),
-                value_len: first.len(),
-                expected: bit_width,
-            });
-        }
-        Ok(first.to_string().to_lowercase())
     }
 }
 
-fn parse_line(line: &str) -> Result<(String, String, ValueKind), MnemonicParseError> {
-    let tokens = split_tokens(line);
+fn key_display(key: &VariableValue, bit_width: u32) -> String {
+    match key {
+        VariableValue::String(s) => s.clone(),
+        VariableValue::BigUint(v) => format!("{v:0width$b}", width = bit_width as usize),
+    }
+}
 
-    if tokens.is_empty() {
+fn parse_line(line: &str) -> Result<(VariableValue, String, ValueKind, u32), MnemonicParseError> {
+    let mut chars = line.char_indices().peekable();
+    while let Some((_, ch)) = chars.peek() {
+        if ch.is_whitespace() {
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    let start = if let Some((idx, _)) = chars.peek().copied() {
+        idx
+    } else {
+        return Err(MnemonicParseError::EmptyLine);
+    };
+
+    let mut first_end = line.len();
+    while let Some((idx, ch)) = chars.next() {
+        if ch.is_whitespace() {
+            first_end = idx;
+            break;
+        }
+    }
+
+    let first_token = &line[start..first_end];
+    let remainder = line[first_end..].trim_start();
+
+    if first_token.is_empty() {
         return Err(MnemonicParseError::EmptyLine);
     }
 
-    let first = parse_first_column(&tokens[0])?;
+    let (first, kind, first_len) = parse_first_column_with_kind(first_token)?;
 
-    if tokens.len() < 2 {
+    if remainder.is_empty() {
         return Err(MnemonicParseError::MissingSecondColumn);
     }
 
-    let second = tokens[1].clone();
-
-    let kind = if tokens.len() >= 3 {
-        parse_color_kind(&tokens[2])?
-    } else {
-        ValueKind::Normal
-    };
-
-    Ok((first, second, kind))
+    Ok((first, remainder.to_string(), kind, first_len))
 }
 
-fn parse_first_column(token: &str) -> Result<String, MnemonicParseError> {
+fn parse_label_and_kind(token: &str) -> Result<(VariableValue, u32), MnemonicParseError> {
     // Support underscore separators; only strip them for numeric parsing, keep original for literals
     let cleaned = token.replace('_', "");
 
+    // Hex prefix (0x or 0X)
     if cleaned.starts_with("0x") || cleaned.starts_with("0X") {
         let hex_str = &cleaned[2..];
-        let num = u64::from_str_radix(hex_str, 16)
-            .map_err(|_| MnemonicParseError::InvalidHex(token.to_string()))?;
-        return Ok(format!("{:b}", num));
+        let num = BigUint::parse_bytes(hex_str.as_bytes(), 16)
+            .ok_or_else(|| MnemonicParseError::InvalidHex(token.to_string()))?;
+        let bits = num.bits() as u32;
+        return Ok((VariableValue::BigUint(num), bits));
     }
 
-    if !cleaned.is_empty() && cleaned.chars().all(|c| c == '0' || c == '1') {
-        return Ok(cleaned);
+    // Binary prefix (0b or 0B)
+    if cleaned.starts_with("0b") || cleaned.starts_with("0B") {
+        let bin_str = &cleaned[2..];
+        let num = BigUint::parse_bytes(bin_str.as_bytes(), 2)
+            .ok_or_else(|| MnemonicParseError::InvalidBitsValue(token.to_string()))?;
+        let bits = num.bits() as u32;
+        return Ok((VariableValue::BigUint(num), bits));
     }
 
-    if let Ok(num) = cleaned.parse::<u64>() {
-        return Ok(format!("{:b}", num));
+    // Octal prefix (0o or 0O)
+    if cleaned.starts_with("0o") || cleaned.starts_with("0O") {
+        let oct_str = &cleaned[2..];
+        let num = BigUint::parse_bytes(oct_str.as_bytes(), 8)
+            .ok_or_else(|| MnemonicParseError::InvalidOctal(token.to_string()))?;
+        let bits = num.bits() as u32;
+        return Ok((VariableValue::BigUint(num), bits));
     }
 
-    Ok(token.to_string())
+    // Decimal (default for numeric strings)
+    if let Some(num) = BigUint::parse_bytes(cleaned.as_bytes(), 10) {
+        let bits = num.bits() as u32;
+        return Ok((VariableValue::BigUint(num), bits));
+    }
+
+    // String literal
+    Ok((VariableValue::String(token.to_string()), token.len() as u32))
 }
 
-fn pad_binary_string(binary: &str, width: usize) -> String {
-    format!("{:0>width$}", binary, width = width)
+fn parse_first_column_with_kind(
+    token: &str,
+) -> Result<(VariableValue, ValueKind, u32), MnemonicParseError> {
+    // Check if token contains [kind] notation: value[kind]
+    if let Some(bracket_pos) = token.find('[') {
+        if let Some(close_bracket) = token.find(']') {
+            if close_bracket > bracket_pos {
+                let value_part = &token[..bracket_pos];
+                let kind_part = &token[bracket_pos + 1..close_bracket];
+
+                let (value, len) = parse_label_and_kind(value_part)?;
+                let kind = parse_color_kind(kind_part)?;
+
+                return Ok((value, kind, len));
+            }
+        }
+    }
+
+    // No [kind] notation, default to Normal
+    let (value, len) = parse_label_and_kind(token)?;
+    Ok((value, ValueKind::Normal, len))
 }
 
 fn parse_color_kind(token: &str) -> Result<ValueKind, MnemonicParseError> {
@@ -383,64 +465,6 @@ fn parse_color_kind(token: &str) -> Result<ValueKind, MnemonicParseError> {
         .get(lower.as_str())
         .copied()
         .ok_or_else(|| MnemonicParseError::UnknownKindColor(token.to_string()))
-}
-
-fn split_tokens(line: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut chars = line.chars();
-
-    while let Some(ch) = chars.next() {
-        if ch == '"' {
-            in_quotes = !in_quotes;
-            continue;
-        }
-
-        if ch == '\\' && in_quotes {
-            // Support escaped characters inside quoted strings (e.g. \" and \\\\)
-            if let Some(escaped) = chars.next() {
-                current.push(escaped);
-            }
-            continue;
-        }
-
-        if ch == ' ' && !in_quotes {
-            if !current.is_empty() {
-                tokens.push(current.clone());
-                current.clear();
-            }
-            continue;
-        }
-
-        current.push(ch);
-    }
-
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-
-    tokens
-}
-
-fn strip_inline_comment(line: &str) -> &str {
-    let bytes = line.as_bytes();
-    let mut in_quotes = false;
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        match bytes[i] as char {
-            '"' => {
-                in_quotes = !in_quotes;
-                i += 1;
-            }
-            '/' if !in_quotes && bytes[i + 1] as char == '/' => {
-                // Found // outside quotes
-                return &line[..i];
-            }
-            _ => i += 1,
-        }
-    }
-    line
 }
 
 fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
@@ -467,30 +491,51 @@ mod tests {
 
     #[test]
     fn parse_with_name_bits_and_entries_binary_and_hex_and_colors() {
-        let content = "Name: MyMap\nBits: 4\n0 ZERO red\n1 ONE #00FF00\n0xA TEN blue";
+        let content = "Name: MyMap\nBits: 4\n0[red] ZERO\n1[#00FF00] ONE\n0xA[blue] TEN";
         let map = parse_content_with_default_name(content, None).unwrap();
         assert_eq!(map.name, Some("MyMap".to_string()));
         assert_eq!(map.bits, 4);
-        // Expect padded binary keys
-        let zero = map.entries.get("0000").expect("ZERO entry");
+        // Expect numeric keys stored as BigUint
+        let zero = map
+            .entries
+            .get(&VariableValue::BigUint(BigUint::from(0u32)))
+            .expect("ZERO entry");
         assert_eq!(zero.label, "ZERO");
         assert_eq!(zero.kind, ValueKind::Custom(Color32::RED));
-        let one = map.entries.get("0001").expect("ONE entry");
+        let one = map
+            .entries
+            .get(&VariableValue::BigUint(BigUint::from(1u32)))
+            .expect("ONE entry");
         assert_eq!(one.label, "ONE");
         // #00FF00 => green
         assert_eq!(one.kind, ValueKind::Custom(Color32::GREEN));
-        let ten = map.entries.get("1010").expect("TEN entry");
+        let ten = map
+            .entries
+            .get(&VariableValue::BigUint(BigUint::from(10u32)))
+            .expect("TEN entry");
         assert_eq!(ten.label, "TEN");
         assert_eq!(ten.kind, ValueKind::Custom(Color32::BLUE));
     }
 
     #[test]
     fn duplicate_keys_keep_first_and_log() {
-        let content = "Bits: 4\n0 ZERO red\n0 ZERO_DUP blue\n1 ONE green";
+        let content = "Bits: 4\n0[red] ZERO\n0[blue] ZERO_DUP\n1[green] ONE";
         let map = parse_content_with_default_name(content, None).unwrap();
         // Only one entry for key 0000
-        assert_eq!(map.entries.get("0000").unwrap().label, "ZERO");
-        assert_eq!(map.entries.get("0001").unwrap().label, "ONE");
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(0u32)))
+                .unwrap()
+                .label,
+            "ZERO"
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(1u32)))
+                .unwrap()
+                .label,
+            "ONE"
+        );
         assert_eq!(map.entries.len(), 2);
     }
 
@@ -500,8 +545,14 @@ mod tests {
         let content = "3 THREE\n15 FIFTEEN"; // 3 => 11, 15 => 1111 so width=4
         let map = parse_content_with_default_name(content, Some("Numbers".to_string())).unwrap();
         assert_eq!(map.bits, 4);
-        assert!(map.entries.contains_key("0011"));
-        assert!(map.entries.contains_key("1111"));
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(3u32)))
+        );
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(15u32)))
+        );
     }
 
     #[test]
@@ -518,51 +569,136 @@ mod tests {
     }
 
     #[test]
-    fn split_tokens_handles_quotes() {
-        let line = "0101 \"Label With Spaces\" red";
-        let tokens = split_tokens(line);
-        assert_eq!(tokens.len(), 3);
-        assert_eq!(tokens[0], "0101");
-        assert_eq!(tokens[1], "Label With Spaces");
-        assert_eq!(tokens[2], "red");
-    }
-
-    #[test]
-    fn split_tokens_handles_escaped_quotes_and_backslashes() {
-        // Use a raw string literal so escapes are visible to the parser
-        let line = r#"0101 "Label \"With\" Escaped\\Back" red"#;
-        let tokens = split_tokens(line);
-        assert_eq!(tokens.len(), 3);
-        assert_eq!(tokens[0], "0101");
-        // Expected: the escaped quotes become literal quotes, and \\ becomes a single backslash
-        assert_eq!(tokens[1], "Label \"With\" Escaped\\Back");
-        assert_eq!(tokens[2], "red");
+    fn parse_line_allows_unquoted_label_with_spaces() {
+        let line = "0b0101 Label With Spaces";
+        let (val, label, kind, len) = parse_line(line).expect("parse line");
+        assert_eq!(label, "Label With Spaces");
+        assert_eq!(len, 3);
+        assert!(matches!(kind, ValueKind::Normal));
+        match val {
+            VariableValue::BigUint(v) => assert_eq!(v, BigUint::from(0b0101u32)),
+            other => panic!("unexpected value parsed: {other:?}"),
+        }
     }
 
     #[test]
     fn parse_hex_and_decimal_numbers() {
-        let content = "Bits: 5\n0x1F HEXVAL blue\n7 DECVAL green"; // 0x1F => 11111, 7 => 00111
+        let content = "Bits: 5\n0x1F[blue] HEXVAL\n7[green] DECVAL"; // 0x1F => 11111, 7 => 00111
         let map = parse_content_with_default_name(content, None).unwrap();
         assert_eq!(map.bits, 5);
-        assert!(map.entries.contains_key("11111"));
-        assert!(map.entries.contains_key("00111"));
-        assert_eq!(map.entries.get("11111").unwrap().label, "HEXVAL");
-        assert_eq!(map.entries.get("00111").unwrap().label, "DECVAL");
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(31u32)))
+        );
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(7u32)))
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(31u32)))
+                .unwrap()
+                .label,
+            "HEXVAL"
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(7u32)))
+                .unwrap()
+                .label,
+            "DECVAL"
+        );
     }
 
     #[test]
     fn mix_binary_and_decimal_without_bits_line_infers_width() {
-        // Raw binary token plus decimal numbers; longest normalized width should be 4
-        let content = "0101 BINLABEL\n7 DECSEVEN\n13 DECTHIRTEEN"; // 7 => 111, 13 => 1101
+        // Binary token with 0b prefix plus decimal numbers; longest normalized width should be 4
+        let content = "0b0101 BINLABEL\n7 DECSEVEN\n13 DECTHIRTEEN"; // 0b0101 => 0101, 7 => 111, 13 => 1101
         let map = parse_content_with_default_name(content, Some("Mixed".to_string())).unwrap();
         assert_eq!(map.name, Some("Mixed".to_string()));
         assert_eq!(map.bits, 4);
-        assert!(map.entries.contains_key("0101")); // binary preserved
-        assert!(map.entries.contains_key("0111")); // 7 padded to 4 bits
-        assert!(map.entries.contains_key("1101")); // 13 already 4 bits
-        assert_eq!(map.entries.get("0101").unwrap().label, "BINLABEL");
-        assert_eq!(map.entries.get("0111").unwrap().label, "DECSEVEN");
-        assert_eq!(map.entries.get("1101").unwrap().label, "DECTHIRTEEN");
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(5u32)))
+        ); // binary preserved
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(7u32)))
+        ); // 7 padded to 4 bits
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(13u32)))
+        ); // 13 already 4 bits
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(5u32)))
+                .unwrap()
+                .label,
+            "BINLABEL"
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(7u32)))
+                .unwrap()
+                .label,
+            "DECSEVEN"
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(13u32)))
+                .unwrap()
+                .label,
+            "DECTHIRTEEN"
+        );
+    }
+
+    #[test]
+    fn parse_binary_octal_hex_decimal_prefixes() {
+        // Test all number formats: 0b (binary), 0o (octal), 0x (hex), and decimal
+        let content =
+            "Bits: 8\n0b1111[red] BINARY\n0o17[green] OCTAL\n0xFF[blue] HEX\n255[yellow] DECIMAL";
+        let map = parse_content_with_default_name(content, None).unwrap();
+        assert_eq!(map.bits, 8);
+        // 0b1111 => 00001111
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(15u32)))
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(15u32)))
+                .unwrap()
+                .label,
+            "BINARY"
+        );
+        // 0o17 => 15 decimal => 00001111 (same as 0b1111, duplicate so keeps first)
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(15u32)))
+                .unwrap()
+                .label,
+            "BINARY"
+        );
+        // 0xFF => 255 decimal => 11111111
+        assert!(
+            map.entries
+                .contains_key(&VariableValue::BigUint(BigUint::from(255u32)))
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(255u32)))
+                .unwrap()
+                .label,
+            "HEX"
+        );
+        // 255 decimal => 11111111 (same as 0xFF, duplicate so keeps first)
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(255u32)))
+                .unwrap()
+                .label,
+            "HEX"
+        );
     }
 
     #[test]
@@ -577,7 +713,7 @@ mod tests {
         pathbuf.push(format!("mnemonic_test_{}.txt", ts));
         let path = Utf8PathBuf::from_path_buf(pathbuf).expect("temp path must be UTF-8");
 
-        let content = "Name: ExampleMnemonic\nBits: 4\n0 ZERO red\n1 ONE green\n10 TWO blue";
+        let content = "Name: ExampleMnemonic\nBits: 4\n0[red] ZERO\n1[green] ONE\n2[blue] TWO";
         std::fs::write(path.as_std_path(), content).expect("write mnemonic file");
 
         let translator = MnemonicTranslator::new_from_file(&path)
@@ -587,7 +723,7 @@ mod tests {
 
         // Match padded binary for string value
         let (label_one, kind_one) =
-            translator.basic_translate(4, &VariableValue::String("0001".into()));
+            translator.basic_translate(4, &VariableValue::BigUint(BigUint::from(1u32)));
         assert_eq!(label_one, "ONE");
         match kind_one {
             ValueKind::Custom(c) => assert!(color_eq(c, Color32::GREEN)),
@@ -634,7 +770,7 @@ mod tests {
         pathbuf.push(format!("{stem}.mnemonic"));
 
         // No Name: line, first line is Bits: so default name should be file stem
-        let content = "Bits: 3\n0 ZERO red\n1 ONE green\n2 TWO blue";
+        let content = "Bits: 3\n0[red] ZERO\n1[green] ONE\n2[blue] TWO";
         let path = Utf8PathBuf::from_path_buf(pathbuf).expect("temp path must be UTF-8");
         std::fs::write(path.as_std_path(), content).expect("write mnemonic file");
         let translator = MnemonicTranslator::new_from_file(&path)
@@ -665,14 +801,32 @@ mod tests {
 
     #[test]
     fn comments_and_blank_lines_are_ignored() {
-        let content = "// top comment\n   // another comment\n\nName: Commented\n// mid\nBits: 3\n// entry comment\n0 ZERO red // inline A\n# Hash comment\n\n1 ONE green // inline B\n   // trailing inline comment line\n2 TWO blue // final";
+        let content = "# top comment\n   # another comment\n\nName: Commented\n# mid\nBits: 3\n# entry comment\n0[red] ZERO\n# Hash comment\n\n1[green] ONE\n   # trailing comment line\n2[blue] TWO";
         let map = parse_content_with_default_name(content, None).unwrap();
         assert_eq!(map.name, Some("Commented".to_string()));
         assert_eq!(map.bits, 3);
         assert_eq!(map.entries.len(), 3);
-        assert_eq!(map.entries.get("000").unwrap().label, "ZERO");
-        assert_eq!(map.entries.get("001").unwrap().label, "ONE");
-        assert_eq!(map.entries.get("010").unwrap().label, "TWO");
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(0u32)))
+                .unwrap()
+                .label,
+            "ZERO"
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(1u32)))
+                .unwrap()
+                .label,
+            "ONE"
+        );
+        assert_eq!(
+            map.entries
+                .get(&VariableValue::BigUint(BigUint::from(2u32)))
+                .unwrap()
+                .label,
+            "TWO"
+        );
     }
 
     #[test]
@@ -688,7 +842,7 @@ mod tests {
         let path = Utf8PathBuf::from_path_buf(pathbuf).expect("temp path must be UTF-8");
 
         // Define entries with various ValueKind keywords
-        let content = "Bits: 4\n0 ZERO warn\n1 ONE undef\n2 TWO highimp\n3 THREE dontcare\n4 FOUR weak\n5 FIVE error\n6 SIX normal";
+        let content = "Bits: 4\n0[warn] ZERO\n1[undef] ONE\n2[highimp] TWO\n3[dontcare] THREE\n4[weak] FOUR\n5[error] FIVE\n6[normal] SIX";
         std::fs::write(path.as_std_path(), content).expect("write mnemonic file");
 
         let translator = MnemonicTranslator::new_from_file(&path)
@@ -698,37 +852,37 @@ mod tests {
 
         // Test each ValueKind keyword
         let (label_zero, kind_zero) =
-            translator.basic_translate(4, &VariableValue::String("0000".into()));
+            translator.basic_translate(4, &VariableValue::BigUint(BigUint::from(0u32)));
         assert_eq!(label_zero, "ZERO");
         assert!(matches!(kind_zero, ValueKind::Warn));
 
         let (label_one, kind_one) =
-            translator.basic_translate(4, &VariableValue::String("0001".into()));
+            translator.basic_translate(4, &VariableValue::BigUint(BigUint::from(1u32)));
         assert_eq!(label_one, "ONE");
         assert!(matches!(kind_one, ValueKind::Undef));
 
         let (label_two, kind_two) =
-            translator.basic_translate(4, &VariableValue::String("0010".into()));
+            translator.basic_translate(4, &VariableValue::BigUint(BigUint::from(2u32)));
         assert_eq!(label_two, "TWO");
         assert!(matches!(kind_two, ValueKind::HighImp));
 
         let (label_three, kind_three) =
-            translator.basic_translate(4, &VariableValue::String("0011".into()));
+            translator.basic_translate(4, &VariableValue::BigUint(BigUint::from(3u32)));
         assert_eq!(label_three, "THREE");
         assert!(matches!(kind_three, ValueKind::DontCare));
 
         let (label_four, kind_four) =
-            translator.basic_translate(4, &VariableValue::String("0100".into()));
+            translator.basic_translate(4, &VariableValue::BigUint(BigUint::from(4u32)));
         assert_eq!(label_four, "FOUR");
         assert!(matches!(kind_four, ValueKind::Weak));
 
         let (label_five, kind_five) =
-            translator.basic_translate(4, &VariableValue::String("0101".into()));
+            translator.basic_translate(4, &VariableValue::BigUint(BigUint::from(5u32)));
         assert_eq!(label_five, "FIVE");
         assert!(matches!(kind_five, ValueKind::Error));
 
         let (label_six, kind_six) =
-            translator.basic_translate(4, &VariableValue::String("0110".into()));
+            translator.basic_translate(4, &VariableValue::BigUint(BigUint::from(6u32)));
         assert_eq!(label_six, "SIX");
         assert!(matches!(kind_six, ValueKind::Normal));
     }
@@ -748,7 +902,7 @@ mod tests {
         }
 
         // InvalidHex via parse_first_column
-        match parse_first_column("0xZZ") {
+        match parse_label_and_kind("0xZZ") {
             Err(MnemonicParseError::InvalidHex(tok)) => assert_eq!(tok, "0xZZ"),
             other => panic!("expected InvalidHex, got: {:?}", other),
         }
@@ -760,7 +914,7 @@ mod tests {
         }
 
         // BinaryTooWide
-        match normalize_first_column("1111", 3) {
+        match normalize_first_column(&VariableValue::String("1111".into()), 4, 3) {
             Err(MnemonicParseError::BinaryTooWide {
                 value,
                 required,
@@ -773,7 +927,7 @@ mod tests {
         }
 
         // StringLengthMismatch
-        match normalize_first_column("ABCD", 3) {
+        match normalize_first_column(&VariableValue::String("ABCD".into()), 4, 3) {
             Err(MnemonicParseError::StringLengthMismatch {
                 value,
                 value_len,
