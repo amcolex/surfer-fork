@@ -176,7 +176,7 @@ pub fn extend_string(val: &str, num_bits: u32) -> String {
     }
 }
 
-#[derive(Debug, PartialEq, Clone, Display, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Display, Hash, Serialize, Deserialize)]
 /// The value of a variable in the waveform as obtained from the waveform source.
 ///
 /// Represented either as an unsigned integer ([`BigUint`]) or as a raw [`String`] with one character per bit.
