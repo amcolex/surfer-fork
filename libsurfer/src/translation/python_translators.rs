@@ -3,9 +3,9 @@ use eyre::anyhow;
 use pyo3::types::{PyAnyMethods, PyDict, PyModule, PyStringMethods};
 use pyo3::{Bound, Py, Python};
 use std::ffi::{CStr, CString};
-use surfer_translation_types::python::{PythonValueKind, surfer_pyo3_module};
-use surfer_translation_types::{BasicTranslator, ValueKind, VariableValue};
 use tracing::{error, info};
+use surfer_translation_types::{BasicTranslator, ValueKind, VariableValue};
+use surfer_waveform::{python::PythonValueKind, surfer_pyo3_module};
 
 use crate::wave_container::{ScopeId, VarId};
 
