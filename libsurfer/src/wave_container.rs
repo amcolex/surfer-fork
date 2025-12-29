@@ -4,7 +4,7 @@ use chrono::prelude::{DateTime, Utc};
 use eyre::{Result, bail};
 use num::BigUint;
 use serde::{Deserialize, Serialize};
-use surfer_translation_types::VariableValue;
+use surfer_translation_types::{VariableIndex, VariableValue};
 
 use crate::cxxrtl_container::CxxrtlContainer;
 use crate::time::{TimeScale, TimeUnit};
@@ -137,12 +137,17 @@ impl ScopeRefExt for ScopeRef {
 
 #[local_impl::local_impl]
 impl VariableRefExt for VariableRef {
-    fn new(path: ScopeRef, name: String) -> Self {
-        Self::new_with_id(path, name, VarId::default())
+    fn new(path: ScopeRef, name: String, index: Option<VariableIndex>) -> Self {
+        Self::new_with_id(path, name, VarId::default(), index)
     }
 
-    fn new_with_id(path: ScopeRef, name: String, id: VarId) -> Self {
-        Self { path, name, id }
+    fn new_with_id(path: ScopeRef, name: String, id: VarId, index: Option<VariableIndex>) -> Self {
+        Self {
+            path,
+            name,
+            id,
+            index,
+        }
     }
 
     fn from_hierarchy_string(s: &str) -> Self {
@@ -156,12 +161,14 @@ impl VariableRefExt for VariableRef {
                 path: ScopeRef::empty(),
                 name: String::new(),
                 id: VarId::default(),
+                index: None,
             }
         } else {
             Self {
                 path: ScopeRef::from_strs(&components[..(components.len()) - 1]),
                 name: components.last().unwrap().to_string(),
                 id: VarId::default(),
+                index: None,
             }
         }
     }
@@ -192,6 +199,7 @@ impl VariableRefExt for VariableRef {
                 .expect("from_strs called with an empty string")
                 .to_string(),
             id: VarId::default(),
+            index: None,
         }
     }
 
