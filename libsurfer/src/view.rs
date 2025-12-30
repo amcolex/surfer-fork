@@ -303,7 +303,7 @@ impl SystemState {
         }
 
         if self.user.show_keys {
-            draw_control_help_window(ctx, &mut msgs);
+            draw_control_help_window(ctx, &mut msgs, &self.user.shortcuts);
         }
 
         if self.user.show_quick_start {

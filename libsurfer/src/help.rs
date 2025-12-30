@@ -3,6 +3,7 @@ use egui::{Context, Grid, OpenUrl, RichText, ScrollArea, Ui, Window};
 use egui_remixicon::icons;
 use emath::{Align2, Pos2};
 
+use crate::keyboard_shortcuts::{ShortcutAction, SurferShortcuts};
 use crate::wave_source::LoadOptions;
 use crate::{SystemState, message::Message};
 
@@ -159,7 +160,11 @@ pub fn draw_quickstart_help_window(ctx: &Context, msgs: &mut Vec<Message>) {
     }
 }
 
-pub fn draw_control_help_window(ctx: &Context, msgs: &mut Vec<Message>) {
+pub fn draw_control_help_window(
+    ctx: &Context,
+    msgs: &mut Vec<Message>,
+    shortcuts: &SurferShortcuts,
+) {
     let mut open = true;
     Window::new("🖮 Surfer controls")
         .collapsible(true)
@@ -167,7 +172,7 @@ pub fn draw_control_help_window(ctx: &Context, msgs: &mut Vec<Message>) {
         .open(&mut open)
         .show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                key_listing(ui);
+                key_listing(ui, shortcuts);
                 ui.add_space(10.);
                 if ui.button("Close").clicked() {
                     msgs.push(Message::SetKeyHelpVisible(false));
@@ -180,25 +185,36 @@ pub fn draw_control_help_window(ctx: &Context, msgs: &mut Vec<Message>) {
 }
 
 /// Long list of key binding for the dialog.
-fn key_listing(ui: &mut Ui) {
+fn key_listing(ui: &mut Ui, shortcuts: &SurferShortcuts) {
+    let save_state_file = shortcuts.format_shortcut(ShortcutAction::SaveStateFile);
+    let toggle_hierarchy = shortcuts.format_shortcut(ShortcutAction::ToggleSidePanel);
+    let toggle_toolbar = shortcuts.format_shortcut(ShortcutAction::ToggleToolbar);
+    let reload_waveform = shortcuts.format_shortcut(ShortcutAction::ReloadWaveform);
+    let focus_item = shortcuts.format_shortcut(ShortcutAction::ItemFocus);
+    let goto_end = shortcuts.format_shortcut(ShortcutAction::GoToEnd);
+    let goto_start = shortcuts.format_shortcut(ShortcutAction::GoToStart);
+    #[cfg(not(target_arch = "wasm32"))]
+    let ui_zoom_in = shortcuts.format_shortcut(ShortcutAction::UiZoomIn);
+    #[cfg(not(target_arch = "wasm32"))]
+    let ui_zoom_out = shortcuts.format_shortcut(ShortcutAction::UiZoomOut);
     let keys = vec![
         ("🚀", "Space", "Show command prompt"),
         ("↔", "Scroll", "Pan"),
         ("🔎", "Ctrl+Scroll", "Zoom"),
-        (icons::SAVE_FILL, "Ctrl+s", "Save the state"),
+        (icons::SAVE_FILL, &save_state_file, "Save the state"),
         (
             icons::LAYOUT_LEFT_FILL,
-            "b",
+            &toggle_hierarchy,
             "Show or hide the design hierarchy",
         ),
         (icons::MENU_FILL, "Alt+m", "Show or hide menu"),
-        (icons::TOOLS_FILL, "t", "Show or hide toolbar"),
+        (icons::TOOLS_FILL, &toggle_toolbar, "Show or hide toolbar"),
         (icons::ZOOM_IN_FILL, "+", "Zoom in"),
         (icons::ZOOM_OUT_FILL, "-", "Zoom out"),
         #[cfg(not(target_arch = "wasm32"))]
-        ("", "Ctrl+'+'", "UI Zoom in"),
+        ("", &ui_zoom_in, "UI Zoom in"),
         #[cfg(not(target_arch = "wasm32"))]
-        ("", "Ctrl+'-'", "UI Zoom out"),
+        ("", &ui_zoom_out, "UI Zoom out"),
         ("", "k/⬆", "Scroll up"),
         ("", "j/⬇", "Scroll down"),
         ("", "Ctrl+k/⬆", "Move focused item up"),
@@ -210,13 +226,13 @@ fn key_listing(ui: &mut Ui) {
         ("", "Ctrl+Alt+j/⬇", "Extend selection down"),
         ("", "u/Shift+u", "Undo/redo last change"),
         ("", "Ctrl+z/Ctrl+y", "Undo/redo last change"),
-        ("", "f", "Fast focus a signal"),
+        ("", &focus_item, "Fast focus a variable"),
         ("", "m", "Add marker at current cursor"),
         ("", "Ctrl+0-9", "Add numbered marker"),
         ("", "0-9", "Center view at numbered marker"),
-        (icons::REWIND_START_FILL, "s", "Go to start"),
-        (icons::FORWARD_END_FILL, "e", "Go to end"),
-        (icons::REFRESH_LINE, "r", "Reload waveform"),
+        (icons::REWIND_START_FILL, &goto_start, "Go to start"),
+        (icons::FORWARD_END_FILL, &goto_end, "Go to end"),
+        (icons::REFRESH_LINE, &reload_waveform, "Reload waveform"),
         (icons::SPEED_FILL, "Page up", "Go one page/screen right"),
         (icons::REWIND_FILL, "Page down", "Go one page/screen left"),
         (
