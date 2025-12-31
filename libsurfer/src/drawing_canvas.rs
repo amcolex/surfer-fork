@@ -860,8 +860,7 @@ impl SystemState {
             .enumerate()
         {
             // Get background color
-            let background_color =
-                self.get_background_color(waves, drawing_info, drawing_info.vidx(), item_count);
+            let background_color = self.get_background_color(waves, drawing_info, item_count);
 
             self.draw_background(
                 drawing_info,
@@ -1002,7 +1001,6 @@ impl SystemState {
             .sorted_by_key(|o| o.top() as i32)
             .enumerate()
         {
-            let vidx = drawing_info.vidx();
             // We draw in absolute coords, but the variable offset in the y
             // direction is also in absolute coordinates, so we need to
             // compensate for that
@@ -1085,7 +1083,6 @@ impl SystemState {
                                         let background_color = self.get_background_color(
                                             waves,
                                             drawing_info,
-                                            vidx,
                                             item_count,
                                         );
 
@@ -1136,7 +1133,6 @@ impl SystemState {
                             .get_best_text_color(self.get_background_color(
                                 waves,
                                 drawing_info,
-                                vidx,
                                 item_count,
                             )),
                     );
@@ -1203,7 +1199,6 @@ impl SystemState {
             .sorted_by_key(|o| o.top() as i32)
             .enumerate()
         {
-            let vidx = drawing_info.vidx();
             let y_offset = drawing_info.top() - zero_y;
 
             let displayed_item = waves
@@ -1321,7 +1316,6 @@ impl SystemState {
                             .get_best_text_color(self.get_background_color(
                                 waves,
                                 drawing_info,
-                                vidx,
                                 item_count,
                             )),
                     );
