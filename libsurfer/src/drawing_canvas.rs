@@ -17,7 +17,7 @@ use surfer_translation_types::{
 use tracing::{error, warn};
 
 use crate::CachedDrawData::TransactionDrawData;
-use crate::analog_renderer::AnalogDrawingCommand;
+use crate::analog_renderer::{AnalogDrawingCommand, variable_analog_draw_commands};
 use crate::clock_highlighting::draw_clock_edge_marks;
 use crate::config::SurferTheme;
 use crate::data_container::DataContainer;
@@ -48,23 +48,18 @@ enum DinotraceDrawingStyle {
 impl DinotraceDrawingStyle {
     fn from_value(val: &VariableValue, num_bits: Option<u32>) -> Self {
         match val {
-            VariableValue::BigUint(u) => {
-                if u.is_zero() {
-                    DinotraceDrawingStyle::AllZeros
-                } else if let Some(bits) = num_bits {
-                    if u.count_ones() == u64::from(bits) {
-                        DinotraceDrawingStyle::AllOnes
-                    } else {
-                        DinotraceDrawingStyle::Normal
-                    }
-                } else {
-                    DinotraceDrawingStyle::Normal
-                }
+            VariableValue::BigUint(u) if u.is_zero() => DinotraceDrawingStyle::AllZeros,
+            VariableValue::BigUint(u)
+                if num_bits.is_some_and(|bits| u.count_ones() == u64::from(bits)) =>
+            {
+                DinotraceDrawingStyle::AllOnes
             }
-            _ => DinotraceDrawingStyle::Normal,
+            VariableValue::BigUint(_) => DinotraceDrawingStyle::Normal,
+            VariableValue::String(_) => DinotraceDrawingStyle::Normal,
         }
     }
 }
+
 pub struct DrawnRegion {
     pub inner: Option<TranslatedValue>,
     /// True if a transition should be drawn even if there is no change in the value
@@ -194,30 +189,30 @@ fn variable_draw_commands(
     );
 
     if is_analog_mode && !is_bool {
-        return crate::analog_renderer::variable_analog_draw_commands(
+        variable_analog_draw_commands(
             displayed_variable,
             display_id,
             waves,
             translators,
             view_width,
             viewport_idx,
-        );
+        )
+    } else {
+        variable_digital_draw_commands(
+            displayed_variable,
+            display_id,
+            timestamps,
+            waves,
+            translators,
+            wave_container,
+            &meta,
+            translator,
+            &info,
+            view_width,
+            viewport_idx,
+            use_dinotrace_style,
+        )
     }
-
-    variable_digital_draw_commands(
-        displayed_variable,
-        display_id,
-        timestamps,
-        waves,
-        translators,
-        wave_container,
-        &meta,
-        translator,
-        &info,
-        view_width,
-        viewport_idx,
-        use_dinotrace_style,
-    )
 }
 
 /// Generate draw commands for digital waveform rendering.
@@ -861,7 +856,7 @@ impl SystemState {
         {
             // Get background color
             let background_color =
-                self.get_background_color(waves, drawing_info, drawing_info.vidx(), item_count);
+                self.get_background_color(waves, drawing_info.vidx(), item_count);
 
             self.draw_background(
                 drawing_info,
@@ -1002,7 +997,6 @@ impl SystemState {
             .sorted_by_key(|o| o.top() as i32)
             .enumerate()
         {
-            let vidx = drawing_info.vidx();
             // We draw in absolute coords, but the variable offset in the y
             // direction is also in absolute coordinates, so we need to
             // compensate for that
@@ -1084,8 +1078,7 @@ impl SystemState {
                                         // Get background color and determine best text color
                                         let background_color = self.get_background_color(
                                             waves,
-                                            drawing_info,
-                                            vidx,
+                                            drawing_info.vidx(),
                                             item_count,
                                         );
 
@@ -1135,8 +1128,7 @@ impl SystemState {
                             .theme
                             .get_best_text_color(self.get_background_color(
                                 waves,
-                                drawing_info,
-                                vidx,
+                                drawing_info.vidx(),
                                 item_count,
                             )),
                     );
@@ -1203,7 +1195,6 @@ impl SystemState {
             .sorted_by_key(|o| o.top() as i32)
             .enumerate()
         {
-            let vidx = drawing_info.vidx();
             let y_offset = drawing_info.top() - zero_y;
 
             let displayed_item = waves
@@ -1320,8 +1311,7 @@ impl SystemState {
                             .theme
                             .get_best_text_color(self.get_background_color(
                                 waves,
-                                drawing_info,
-                                vidx,
+                                drawing_info.vidx(),
                                 item_count,
                             )),
                     );
