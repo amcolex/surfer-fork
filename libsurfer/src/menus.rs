@@ -783,8 +783,8 @@ impl SystemState {
                             .variable_meta(&path.root)
                             .and_then(|meta| t.translates(&meta))
                             .context(format!(
-                                "Failed to check if {translator_name} translates {:?}",
-                                path.root.full_path(),
+                                "Failed to check if {translator_name} translates {}",
+                                path.root.full_path_string(),
                             )) {
                             Ok(TranslationPreference::Yes) => true,
                             Ok(TranslationPreference::Prefer) => true,
