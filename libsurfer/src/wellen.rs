@@ -275,7 +275,7 @@ impl WellenContainer {
                     let index = v
                         .index()
                         .and_then(|i| if i.length() == 1 { Some(i.lsb()) } else { None });
-                    VariableRef::new_with_id(
+                    VariableRef::new_with_id_and_index(
                         scope_ref.clone(),
                         v.name(h).to_string(),
                         VarId::Wellen(id),
@@ -298,7 +298,7 @@ impl WellenContainer {
                     let index = v
                         .index()
                         .and_then(|i| if i.length() == 1 { Some(i.lsb()) } else { None });
-                    VariableRef::new_with_id(
+                    VariableRef::new_with_id_and_index(
                         scope_ref.clone(),
                         v.name(h).to_string(),
                         VarId::Wellen(id),
@@ -320,7 +320,7 @@ impl WellenContainer {
                     let index = v
                         .index()
                         .and_then(|i| if i.length() == 1 { Some(i.lsb()) } else { None });
-                    VariableRef::new_with_id(
+                    VariableRef::new_with_id_and_index(
                         scope_ref.clone(),
                         v.name(h).to_string(),
                         VarId::Wellen(id),
@@ -343,7 +343,7 @@ impl WellenContainer {
                     let index = v
                         .index()
                         .and_then(|i| if i.length() == 1 { Some(i.lsb()) } else { None });
-                    VariableRef::new_with_id(
+                    VariableRef::new_with_id_and_index(
                         scope_ref.clone(),
                         v.name(h).to_string(),
                         VarId::Wellen(id),
@@ -372,7 +372,7 @@ impl WellenContainer {
 
     #[must_use]
     pub fn update_variable_ref(&self, variable: &VariableRef) -> Option<VariableRef> {
-        // IMPORTANT: lookup by name! Also consider index if provided.
+        // IMPORTANT: lookup by name! Also consider index if a single-digit index is provided.
         let h = &self.hierarchy;
         let index = variable
             .index
@@ -393,19 +393,18 @@ impl WellenContainer {
             let new_scope_ref = variable.path.with_id(ScopeId::Wellen(scope));
 
             // now we lookup the variable with index if provided
-            if let Some(var) = h[scope]
-                .vars(h)
-                .find(|r| h[*r].name(h) == variable.name && h[*r].index() == index)
-            {
-                (var, new_scope_ref)
-            } else {
-                // fallback to lookup without index
-                let var = h[scope].vars(h).find(|r| h[*r].name(h) == variable.name)?;
-                (var, new_scope_ref)
-            }
+            let var = h[scope].vars(h).find(|r| {
+                h[*r].name(h) == variable.name && {
+                    let var_index = h[*r].index();
+                    // match either exact index, or if no index is provided, match only variables with length >= 2
+                    var_index == index
+                        || (index.is_none() && var_index.is_some_and(|i| i.length() >= 2))
+                }
+            })?;
+            (var, new_scope_ref)
         };
 
-        let new_variable_ref = VariableRef::new_with_id(
+        let new_variable_ref = VariableRef::new_with_id_and_index(
             new_scope_ref,
             variable.name.clone(),
             VarId::Wellen(var),
