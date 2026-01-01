@@ -1267,7 +1267,14 @@ impl SystemState {
         }
 
         item_label.context_menu(|ui| {
-            self.item_context_menu(field, msgs, ui, vidx);
+            self.item_context_menu(
+                field,
+                msgs,
+                ui,
+                vidx,
+                true,
+                crate::message::MessageTarget::CurrentSelection,
+            );
         });
 
         item_label
@@ -1456,6 +1463,8 @@ impl SystemState {
                                     msgs,
                                     ui,
                                     vidx,
+                                    true,
+                                    crate::message::MessageTarget::CurrentSelection,
                                 );
                             });
                         }
@@ -1474,7 +1483,14 @@ impl SystemState {
                                 self.user.config.theme.get_best_text_color(backgroundcolor),
                             ))
                             .context_menu(|ui| {
-                                self.item_context_menu(None, msgs, ui, vidx);
+                                self.item_context_menu(
+                                    None,
+                                    msgs,
+                                    ui,
+                                    vidx,
+                                    true,
+                                    crate::message::MessageTarget::CurrentSelection,
+                                );
                             });
                         } else {
                             ui.label("");
