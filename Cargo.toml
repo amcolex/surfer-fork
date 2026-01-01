@@ -63,7 +63,6 @@ half = "2.5"
 image = { version = "0.25", default-features = false, features = ["png"] }
 instruction-decoder = { path = "instruction-decoder" }
 itertools = "0.14.0"
-lazy_static = "1.5.0"
 leb128 = "0.2.5"
 local-impl = "0.1.2"
 lz4_flex = "0.12"
@@ -73,7 +72,7 @@ pure-rust-locales = "0.8.1"
 pyo3 = { version = "0.27.2", features = ["auto-initialize", "abi3"] }
 rayon = "1.10.0"
 regex = "1.11.1"
-reqwest = { version = "0.12.25", features = ["stream"] }
+reqwest = { version = "0.13.1", features = ["stream"] }
 rfd = { version = "0.16", default-features = false, features = [
     "tokio",
     "xdg-portal",
