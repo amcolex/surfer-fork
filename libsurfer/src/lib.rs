@@ -87,7 +87,6 @@ use eyre::Result;
 use ftr_parser::types::Transaction;
 use futures::executor::block_on;
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use message::MessageTarget;
 use num::BigInt;
 use serde::Deserialize;
@@ -130,15 +129,16 @@ use crate::wellen::{HeaderResult, convert_format};
 /// things until program exit
 pub(crate) static OUTSTANDING_TRANSACTIONS: AtomicUsize = AtomicUsize::new(0);
 
-lazy_static! {
-    pub static ref EGUI_CONTEXT: RwLock<Option<Arc<egui::Context>>> = RwLock::new(None);
-}
+pub static EGUI_CONTEXT: std::sync::LazyLock<RwLock<Option<Arc<egui::Context>>>> =
+    std::sync::LazyLock::new(|| RwLock::new(None));
 
 #[cfg(target_arch = "wasm32")]
-lazy_static! {
-    pub(crate) static ref WCP_CS_HANDLER: IngressHandler<WcpCSMessage> = IngressHandler::new();
-    pub(crate) static ref WCP_SC_HANDLER: GlobalChannelTx<WcpSCMessage> = GlobalChannelTx::new();
-}
+pub(crate) static WCP_CS_HANDLER: std::sync::LazyLock<IngressHandler<WcpCSMessage>> =
+    std::sync::LazyLock::new(IngressHandler::new);
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) static WCP_SC_HANDLER: std::sync::LazyLock<GlobalChannelTx<WcpSCMessage>> =
+    std::sync::LazyLock::new(GlobalChannelTx::new);
 
 #[derive(Default)]
 pub struct StartupParams {
