@@ -252,6 +252,8 @@ pub async fn index_of_name(name: String) -> Option<usize> {
     .await
 }
 
+/// The internal state is not a stable format and there is no expectations
+/// about it working across versions.
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub async fn get_state() -> Option<String> {
     perform_query(Box::new(move |state| state.encode_state())).await

@@ -288,6 +288,8 @@ pub enum Message {
     ReloadPythonPlugin,
     SaveStateFile(Option<PathBuf>),
     /// Load state from data.
+    /// Note: the internal state is not a stable format and this should not be
+    /// relied on to work across revisions.
     LoadStateFromData(Vec<u8>),
     LoadStateFile(Option<PathBuf>),
     LoadState(Box<UserState>, Option<PathBuf>),
