@@ -1,5 +1,6 @@
 use crate::message::Message;
 use crate::translation::fixed_point::{big_uint_to_sfixed, big_uint_to_ufixed};
+use crate::variable_meta::VariableMetaExt;
 use crate::wave_container::{ScopeId, VarId};
 use eyre::Result;
 use half::{bf16, f16};
