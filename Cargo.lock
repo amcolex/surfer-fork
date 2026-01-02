@@ -3045,6 +3045,7 @@ dependencies = [
  "serde_json",
  "softposit",
  "surfer-translation-types",
+ "surfer-waveform",
  "surver",
  "sys-locale",
  "tempfile",
@@ -5067,6 +5068,15 @@ dependencies = [
  "num",
  "pyo3",
  "serde",
+]
+
+[[package]]
+name = "surfer-waveform"
+version = "0.6.0-dev"
+dependencies = [
+ "ecolor",
+ "pyo3",
+ "surfer-translation-types",
 ]
 
 [[package]]
