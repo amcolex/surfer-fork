@@ -514,8 +514,12 @@ pub async fn surver_main(
     let ip_addr: std::net::IpAddr = bind_address
         .parse()
         .with_context(|| format!("Invalid bind address: {bind_address}"))?;
-    if bind_address != "127.0.0.1" {
-        warn!("Server is binding to {bind_address} instead of 127.0.0.1 (localhost)");
+    if bind_address != std::net::Ipv4Addr::LOCALHOST.to_string()
+        && bind_address != std::net::Ipv6Addr::LOCALHOST.to_string()
+    {
+        warn!(
+            "Server is binding to {bind_address} instead of 127.0.0.1/0:0:0:0:0:0:0:1 (localhost)"
+        );
         warn!("This may make the server accessible from external networks");
         warn!("Surver traffic is unencrypted and unauthenticated - use with caution!");
     }
