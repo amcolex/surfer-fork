@@ -514,8 +514,12 @@ pub async fn surver_main(
     let ip_addr: std::net::IpAddr = bind_address
         .parse()
         .with_context(|| format!("Invalid bind address: {bind_address}"))?;
-    if bind_address != "127.0.0.1" {
-        warn!("Server is binding to {bind_address} instead of 127.0.0.1 (localhost)");
+    if bind_address != std::net::Ipv4Addr::LOCALHOST.to_string()
+        && bind_address != std::net::Ipv6Addr::LOCALHOST.to_string()
+    {
+        warn!(
+            "Server is binding to {bind_address} instead of 127.0.0.1/0:0:0:0:0:0:0:1 (localhost)"
+        );
         warn!("This may make the server accessible from external networks");
         warn!("Surver traffic is unencrypted and unauthenticated - use with caution!");
     }
@@ -530,9 +534,11 @@ pub async fn surver_main(
     // print out status
     info!("Starting server on {addr}. To use:");
     info!("1. Setup an ssh tunnel: -L {port}:localhost:{port}");
-    let hostname = whoami::fallible::hostname();
-    if let Ok(hostname) = hostname.as_ref() {
-        let username = whoami::username();
+    let hostname = whoami::hostname();
+    if let Ok(hostname) = hostname.as_ref()
+        && hostname != "localhost"
+        && let Ok(username) = whoami::username()
+    {
         info!(
             "   The correct command may be: ssh -L {port}:localhost:{port} {username}@{hostname} "
         );
