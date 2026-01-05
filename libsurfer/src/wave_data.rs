@@ -238,7 +238,7 @@ impl WaveData {
     ///
     /// Used after loading new waves, signals or switching a bunch of translators
     fn update_metadata(&mut self, translators: &TranslatorList) {
-        for (_vidx, di) in self.displayed_items.iter_mut() {
+        for di in self.displayed_items.values_mut() {
             let DisplayedItem::Variable(displayed_variable) = di else {
                 continue;
             };
@@ -292,7 +292,7 @@ impl WaveData {
                 .to_bigint()
                 .unwrap();
             if new_num_timestamps != old_num_timestamps {
-                for viewport in self.viewports.iter_mut() {
+                for viewport in &mut self.viewports {
                     *viewport = viewport.clip_to(&old_num_timestamps, &new_num_timestamps);
                 }
             }
@@ -419,6 +419,7 @@ impl WaveData {
         target_position: Option<TargetPosition>,
         update_display_names: bool,
         ignore_failures: bool,
+        variable_name_type: Option<VariableNameType>,
     ) -> (Option<LoadSignalsCmd>, Vec<DisplayedItemRef>) {
         let mut indices = vec![];
         // load variables from waveform
@@ -463,7 +464,7 @@ impl WaveData {
                 color: None,
                 background_color: None,
                 display_name: variable.name.clone(),
-                display_name_type: self.default_variable_name_type,
+                display_name_type: variable_name_type.unwrap_or(self.default_variable_name_type),
                 manual_name: None,
                 format: None,
                 field_formats: vec![],
