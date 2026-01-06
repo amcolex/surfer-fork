@@ -31,6 +31,7 @@ egui-remixicon.workspace = true
 emath.workspace = true
 enum-iterator.workspace = true
 epaint.workspace = true
+extism-convert.workspace = true
 f128 = { path = "../f128", optional = true }
 ftr_parser.workspace = true
 futures-core.workspace = true
