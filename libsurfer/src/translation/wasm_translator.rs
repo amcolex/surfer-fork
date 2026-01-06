@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use camino::Utf8PathBuf;
+use directories::ProjectDirs;
 use extism::{Manifest, PTR, Plugin, PluginBuilder, Wasm, host_fn};
 use extism_convert;
 use extism_manifest::MemoryOptions;
