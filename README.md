@@ -37,87 +37,7 @@ If you want to include the [AccessKit](https://accesskit.dev/) integration from 
 add `--features accesskit` at the end of any `cargo build` or `cargo install` command.
 This is enabled by default for the pre-built binaries.
 
-### Compiling from source
-
-Surfer depends on openssl, install it via your package manager
-
-#### Debian/Ubuntu
-
-```bash
-sudo apt install openssl
-sudo apt install libssl-dev
-```
-
-#### Fedora
-
-```bash
-sudo dnf install openssl
-sudo dnf install openssl-devel
-```
-
-#### Arch
-
-```bash
-sudo pacman -S openssl
-```
-
-Then, install [Rust via Rustup](https://rustup.rs) and run
-
-```bash
-cargo install --git https://gitlab.com/surfer-project/surfer.git surfer
-```
-
-You can also install the latest version of `surfer` via the [AUR](https://wiki.archlinux.org/title/Arch_User_Repository) package [`surfer-waveform-git`](https://aur.archlinux.org/packages/surfer-waveform-git).
-
-To compile a version in your local repo without installing it anywhere:
-
-```bash
-git clone git@gitlab.com:surfer-project/surfer.git
-cd surfer
-git submodule update --init --recursive
-cargo build --release
-```
-
-If all goes well, the `surfer` the release executable can found in `./target/release/`.
-To build and run the debug executable you can use `cargo run --bin surfer`.
-
-You can install your own version of surfer with `cargo install --path surfer`.
-
-### Pre-built Linux binary
-
-You can download a pre-built [Linux binary](https://gitlab.com/api/v4/projects/42073614/jobs/artifacts/main/raw/surfer_linux.zip?job=linux_build).
-It is built on a Debian system with some dynamically linked libs, so it may
-not work on all systems.
-
-You can also download a pre-built [Linux binary](https://gitlab.com/api/v4/projects/42073614/jobs/artifacts/main/raw/surfer_linux_rocky.zip?job=rocky_build) suitable for RHEL-like distributions and a pre-built [ARM64 Linux binary](https://gitlab.com/api/v4/projects/42073614/jobs/artifacts/main/raw/surfer_linux_arm64.zip?job=linux_arm64_build).
-
-It is also possible to install through the package manager for [Arch](https://aur.archlinux.org/packages/surfer-waveform-git-bin), [Nix](https://search.nixos.org/packages?channel=25.05&from=0&size=50&sort=alpha_asc&type=packages&query=surfer), and [Solus](https://packages.getsol.us/unstable/s/surfer/).
-
-### Pre-built Windows binary
-
-You can download a pre-built [Windows binary](https://gitlab.com/api/v4/projects/42073614/jobs/artifacts/main/raw/surfer_win.zip?job=windows_build).
-
-Note that sometimes Windows Defender has been known to report Surfer [and other rust projects](https://github.com/cargo-bins/cargo-binstall/issues/945) as a trojan. If in doubt, please use [Virus total](https://www.virustotal.com/) to check.
-
-### Pre-built macos-aarch64 binary
-
-You can download a pre-built [macos-aarch64 binary](https://gitlab.com/api/v4/projects/42073614/jobs/artifacts/main/raw/surfer_macos-aarch64.zip?job=macos-aarch64_build).
-
-However, this binary is currently not signed, so most users will not be able to install it as is. We are looking for a solution to this.
-
-It is also possible to install Surfer through [Homebrew](https://formulae.brew.sh/formula/surfer):
-
-``` bash
-brew install surfer
-```
-
-to get the latest released version or
-
-``` bash
-brew install surfer --HEAD
-```
-
-to get the latest git version (currently recommended).
+See [Documentation](https://docs.surfer-project.org/book/#installation) for further instructions.
 
 ### WSL support
 
@@ -126,7 +46,7 @@ reported that most likely are caused by the gui framework used (as in, Surfer ca
 These are the suggested solutions if it does not work for you:
 
 1. There is a script, `surfer.sh` in the repository, that can be used to start the Windows version from WSL, avoiding the second caveat mentioned below. Read the instructions in the script. This is the preferred way as the Windows version is faster.
-2. Start Surfer in (experimental) server mode, see below, in WSL and open the Windows version using the URL provided from running the previous command.
+2. Start the Surfer server `surver`, see below, in WSL and open the Windows version using the URL provided from running the previous command.
 3. Start Surfer with the environment variable `WAYLAND_DISPLAY` cleared. For example, `WAYLAND_DISPLAY= surfer`.
 4. Compile Surfer with a change in `Cargo.toml` as below (replace the line defining `eframe` version, using the current version if the line below has an older version).  Installing `libgtk-3-dev` and/or `zenity` may be required if errors remain (although most likely it is a dependency of that package that is really required).
 
@@ -142,21 +62,21 @@ These are the suggested solutions if it does not work for you:
 Many aspects of Surfer can be configured.
 To learn more about configuration, have a look at our [wiki](https://gitlab.com/surfer-project/surfer/-/wikis/Configuration).
 
-## Server Mode (experimental)
+## Server Mode (Surver)
 
-It is possible to start Surfer in server mode on one computer and open the waveform viewer on another computer to avoid copying the waveform files. There is also a stand-alone version of the server: Surver. Run
-
-```bash
-surfer server --file waveform.vcd/fst/ghw
-```
-
-or, after installing `surver` with `cargo install --path surver`,
+It is possible to run Surfer in client-server mode, where the server, `surver` is started on one computer with one or more waveform files and the waveform viewer is opened on another computer. This avoids having to copy the waveform files. To do this, run
 
 ```bash
 surver waveform.vcd/fst/ghw
 ```
 
-on the computer where the waveform is located and follow the instructions.
+and follow the instructions.
+
+It is also possible to start Surfer in server mode, although there are plans to drop this at some stage and only support `surver`
+
+```bash
+surfer server --file waveform.vcd/fst/ghw
+```
 
 ## Development Information
 
@@ -199,7 +119,7 @@ the API for messages is unstable.
 
 ## Project Status
 
-Surfer is still in early development, but it is in a usable state. In fact, if
+Surfer is in a usable state. In fact, if
 you are able to take advantage of the extensibility such as with the
 [Spade](https://spade-lang.org) integration, you may even prefer it to the alternatives.
 
@@ -223,6 +143,7 @@ As an indication of the status of the project, here is an incomplete list of sup
   - [x] Octal values
   - [x] VHDL nine-valued std_ulogic support
   - [x] ASCII
+  - [x] Fixed-point based on bit-index (`fixed_pkg`)
   - [x] Floating-point
     - [x] IEEE 754 binary128 (quad), use feature `f128`, using [f128](https://docs.rs/f128/) (requires gcc)
     - [x] IEEE 754 binary64 (double)
@@ -231,6 +152,7 @@ As an indication of the status of the project, here is an incomplete list of sup
     - [x] bfloat16, using [half](https://docs.rs/half/)
     - [x] 8-bit E5M2
     - [x] 8-bit E4M3
+    - [ ] Based on bit-inded (`float_pkg`)
   - [x] Posit, using [softposit](https://docs.rs/softposit/)
     - [x] 32-bit, two exponent bits
     - [x] 16-bit, one exponent bit
@@ -239,16 +161,12 @@ As an indication of the status of the project, here is an incomplete list of sup
     - [x] Quire for 16-bit, one exponent bit
     - [x] Quire for 8-bit, no exponent bit
   - [x] Instruction decoding using [instruction-decoder](https://github.com/ics-jku/instruction-decoder)
-    - [x] RV32I
-      - [x] M
-      - [x] A
-      - [x] F
-      - [x] D
+    - [x] RV32
     - [x] RV64
-    - [ ] Arm
     - [x] MIPS
     - [x] LoongArch64 (LA64)
-  - [ ] Compressed integers
+    - [ ] Arm
+  - [x] Compressed integers
     - [x] LEB128 (also for other bitwidths than 128)
   - [x] Number of ones
   - [x] Leading/trailing zeros/ones
@@ -266,7 +184,7 @@ As an indication of the status of the project, here is an incomplete list of sup
 - [x] VS Code [extension](https://marketplace.visualstudio.com/items?itemName=surfer-project.surfer)
 - [x] Remote support
   - [x] Serving wave forms from remote server
-  - [ ] Multi-file support for remote server
+  - [x] Multi-file support for remote server
   - [ ] Remote control of Surfer
 - [x] Scripting
   - [x] Loading of commands on startup
@@ -276,6 +194,7 @@ As an indication of the status of the project, here is an incomplete list of sup
 - [ ] Computed variables, e.g., `a >= 100`
 - [ ] Clock period time unit
 - [x] Configurable color schemes
+- [x] Analog drawing
 
 ## License
 

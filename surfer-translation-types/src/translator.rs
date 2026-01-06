@@ -7,9 +7,12 @@ use num::BigUint;
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc::Sender;
 
+use std::borrow::Cow;
+
 use crate::result::TranslationResult;
 use crate::{
-    TranslationPreference, ValueKind, VariableEncoding, VariableInfo, VariableMeta, VariableValue,
+    NAN_HIGHIMP, NAN_UNDEF, TranslationPreference, ValueKind, ValueRepr, VariableEncoding,
+    VariableInfo, VariableMeta, VariableValue, parse_numeric_string,
 };
 
 #[cfg_attr(feature = "wasm_plugins", derive(FromBytes, ToBytes))]
@@ -30,7 +33,7 @@ pub enum TrueName {
 }
 
 /// Provides a way for translators to "change" the name of variables in the variable list.
-/// Most translators should not produce VariableNameInfo since it is a global thing that
+/// Most translators should not produce `VariableNameInfo` since it is a global thing that
 /// is done on _all_ variables, not just those which have had the translator applied.
 ///
 /// An example use case is translators for HDLs which want to translate from automatically
@@ -68,30 +71,64 @@ pub enum WaveSource {
 
 /// The most general translator trait.
 pub trait Translator<VarId, ScopeId, Message>: Send + Sync {
+    /// Name of the translator to be shown in the UI
     fn name(&self) -> String;
 
     /// Notify the translator that the wave source has changed to the specified source
     fn set_wave_source(&self, _wave_source: Option<WaveSource>) {}
 
+    /// Translate the specified variable value into a human-readable form
     fn translate(
         &self,
         variable: &VariableMeta<VarId, ScopeId>,
         value: &VariableValue,
     ) -> Result<TranslationResult>;
 
+    /// Return information about the structure of a variable, see [`VariableInfo`].
     fn variable_info(&self, variable: &VariableMeta<VarId, ScopeId>) -> Result<VariableInfo>;
 
     /// Return [`TranslationPreference`] based on if the translator can handle this variable.
     fn translates(&self, variable: &VariableMeta<VarId, ScopeId>) -> Result<TranslationPreference>;
+
+    /// Translate a variable value to a numeric f64 for analog rendering.
+    ///
+    /// Returns [`NAN_UNDEF`] for undefined values and [`NAN_HIGHIMP`] for high-impedance.
+    /// The default implementation calls [`Self::translate`] and parses the result.
+    /// Translators that produce numeric output should override this for
+    /// efficient analog signal rendering without string round-trip.
+    fn translate_numeric(
+        &self,
+        variable: &VariableMeta<VarId, ScopeId>,
+        value: &VariableValue,
+    ) -> Option<f64> {
+        let translation = self.translate(variable, value).ok()?;
+
+        // Check ValueKind first - if it's HighImp or Undef, return appropriate NaN
+        if matches!(translation.kind, ValueKind::HighImp) {
+            return Some(NAN_HIGHIMP);
+        }
+        if matches!(translation.kind, ValueKind::Undef) {
+            return Some(NAN_UNDEF);
+        }
+
+        // Try to parse as numeric value
+        let value_str: Cow<str> = match &translation.val {
+            ValueRepr::Bit(c) => Cow::Owned(c.to_string()),
+            ValueRepr::Bits(_, s) => Cow::Borrowed(s),
+            ValueRepr::String(s) => Cow::Borrowed(s),
+            _ => return None,
+        };
+        parse_numeric_string(&value_str, &self.name())
+    }
 
     /// By default translators are stateless, but if they need to reload, they can
     /// do by defining this method.
     /// Long running translators should run the reloading in the background using `perform_work`
     fn reload(&self, _sender: Sender<Message>) {}
 
-    /// Returns a `VariableNameInfo` about the specified variable which will be applied globally.
+    /// Returns a [`VariableNameInfo`] about the specified variable which will be applied globally.
     /// Most translators should simply return `None` here, see the
-    /// documentation `VariableNameInfo` for exceptions to this rule.
+    /// documentation [`VariableNameInfo`] for exceptions to this rule.
     fn variable_name_info(
         &self,
         variable: &VariableMeta<VarId, ScopeId>,
@@ -106,14 +143,44 @@ pub trait Translator<VarId, ScopeId, Message>: Send + Sync {
 
 /// A translator that only produces non-hierarchical values
 pub trait BasicTranslator<VarId, ScopeId>: Send + Sync {
+    /// Name of the translator to be shown in the UI
     fn name(&self) -> String;
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind);
+    /// Translate the specified variable value into a human-readable form.
+    ///
+    /// If the translator require [`VariableMeta`] information to perform the translation,
+    /// use the more general [`Translator`] instead.
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind);
 
+    /// Translate a variable value to a numeric f64 for analog rendering.
+    ///
+    /// Returns [`NAN_UNDEF`] for undefined values and [`NAN_HIGHIMP`] for high-impedance.
+    /// The default implementation calls [`Self::basic_translate`] and parses the result.
+    /// Translators that produce numeric output should override this for
+    /// efficient analog signal rendering without string round-trip.
+    fn basic_translate_numeric(&self, num_bits: u32, value: &VariableValue) -> Option<f64> {
+        let (val, kind) = self.basic_translate(num_bits, value);
+
+        // Check ValueKind first - if it's HighImp or Undef, return appropriate NaN
+        match kind {
+            ValueKind::HighImp => return Some(NAN_HIGHIMP),
+            ValueKind::Undef => return Some(NAN_UNDEF),
+            _ => {}
+        }
+
+        parse_numeric_string(&val, &self.name())
+    }
+
+    /// Return [`TranslationPreference`] based on if the translator can handle this variable.
+    ///
+    /// If this is not implemented, it will default to accepting all bit-vector types.
     fn translates(&self, variable: &VariableMeta<VarId, ScopeId>) -> Result<TranslationPreference> {
         translates_all_bit_types(variable)
     }
 
+    /// Return information about the structure of a variable, see [`VariableInfo`].
+    ///
+    /// If this is not implemented, it will default to [`VariableInfo::Bits`].
     fn variable_info(&self, _variable: &VariableMeta<VarId, ScopeId>) -> Result<VariableInfo> {
         Ok(VariableInfo::Bits)
     }
@@ -147,17 +214,21 @@ fn map_vector_variable(s: &str) -> NumberParseResult {
 }
 
 impl VariableValue {
-    pub fn parse_biguint(self) -> Result<BigUint, (String, ValueKind)> {
+    /// Parse into a [`BigUint`], returning an error with `ValueKind` for X/Z values.
+    ///
+    /// Returns `Cow::Borrowed` for `BigUint` values and `Cow::Owned` for parsed strings.
+    pub fn parse_biguint(&self) -> Result<Cow<'_, BigUint>, (String, ValueKind)> {
         match self {
-            VariableValue::BigUint(v) => Ok(v),
-            VariableValue::String(s) => match map_vector_variable(&s) {
+            VariableValue::BigUint(v) => Ok(Cow::Borrowed(v)),
+            VariableValue::String(s) => match map_vector_variable(s) {
                 NumberParseResult::Unparsable(v, k) => Err((v, k)),
-                NumberParseResult::Numerical(v) => Ok(v),
+                NumberParseResult::Numerical(v) => Ok(Cow::Owned(v)),
             },
         }
     }
 }
 
+/// A helper function for translators that translates all bit vector types.
 pub fn translates_all_bit_types<VarId, ScopeId>(
     variable: &VariableMeta<VarId, ScopeId>,
 ) -> Result<TranslationPreference> {

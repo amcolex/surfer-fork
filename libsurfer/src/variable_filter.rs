@@ -77,10 +77,11 @@ impl Default for VariableFilter {
 }
 
 impl VariableFilter {
+    #[must_use]
     pub fn new() -> VariableFilter {
         VariableFilter {
             name_filter_type: VariableNameFilterType::Contain,
-            name_filter_str: String::from(""),
+            name_filter_str: String::new(),
             name_filter_case_insensitive: true,
 
             include_inputs: true,
@@ -122,13 +123,9 @@ impl VariableFilter {
                 VariableNameFilterType::Regex => filter_str.clone(),
                 VariableNameFilterType::Start => format!("^{}", escape(&filter_str)),
                 VariableNameFilterType::Contain => escape(&filter_str),
-                _ => unreachable!(),
+                VariableNameFilterType::Fuzzy => unreachable!(),
             };
-            let rebuild = cache
-                .regex_pattern
-                .as_ref()
-                .map(|p| p != &pat)
-                .unwrap_or(true)
+            let rebuild = (cache.regex_pattern.as_ref() != Some(&pat))
                 || cache.regex_case_insensitive != case_insensitive
                 || cache.regex.is_none();
 
@@ -198,15 +195,15 @@ impl VariableFilter {
         if full_path {
             variables
                 .iter()
-                .filter(|&vr| name_filter(&vr.full_path().join(".")))
                 .filter(|&vr| self.kind_filter(vr, wave_container_opt))
+                .filter(|&vr| name_filter(&vr.full_path().join(".")))
                 .cloned()
                 .collect_vec()
         } else {
             variables
                 .iter()
-                .filter(|&vr| name_filter(&vr.name))
                 .filter(|&vr| self.kind_filter(vr, wave_container_opt))
+                .filter(|&vr| name_filter(&vr.name))
                 .cloned()
                 .collect_vec()
         }
@@ -317,7 +314,7 @@ impl SystemState {
     fn add_filtered_variables(&mut self, msgs: &mut Vec<Message>, full_path: bool) {
         if let Some(waves) = self.user.waves.as_ref() {
             if full_path {
-                let variables = waves.inner.as_waves().unwrap().variables(false);
+                let variables = waves.inner.as_waves().unwrap().variables();
                 msgs.push(Message::AddVariables(
                     self.filtered_variables(&variables, false),
                 ));

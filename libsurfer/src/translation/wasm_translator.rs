@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use camino::Utf8PathBuf;
-use directories::ProjectDirs;
 use extism::{Manifest, PTR, Plugin, PluginBuilder, Wasm, host_fn};
 use extism_convert;
 use extism_manifest::MemoryOptions;
@@ -14,18 +13,22 @@ use surfer_translation_types::{
     TranslationPreference, TranslationResult, Translator, VariableInfo, VariableMeta,
     VariableNameInfo, VariableValue,
 };
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
+use crate::config::{LOCAL_DIR, PROJECT_DIR};
 use crate::message::Message;
 use crate::wave_container::{ScopeId, VarId};
+
+pub static TRANSLATOR_DIR: &str = "translators";
 
 pub fn discover_wasm_translators() -> Vec<Message> {
     let search_dirs = [
         std::env::current_dir()
             .ok()
-            .map(|dir| dir.join(".surfer").join("translators")),
-        ProjectDirs::from("org", "surfer-project", "surfer")
-            .map(|dirs| dirs.data_dir().join("translators")),
+            .map(|dir| dir.join(LOCAL_DIR).join(TRANSLATOR_DIR)),
+        PROJECT_DIR
+            .as_ref()
+            .map(|dirs| dirs.data_dir().join(TRANSLATOR_DIR)),
     ]
     .into_iter()
     .flatten()
@@ -34,6 +37,7 @@ pub fn discover_wasm_translators() -> Vec<Message> {
     let plugin_files = search_dirs
         .into_iter()
         .flat_map(|dir| {
+            info!("Looking for translators in {}", dir.display());
             if !dir.exists() {
                 return vec![];
             }
@@ -44,6 +48,7 @@ pub fn discover_wasm_translators() -> Vec<Message> {
                             Ok(entry) => {
                                 let path = entry.path();
                                 if path.extension() == Some(&OsString::from("wasm")) {
+                                    info!("Found {}", path.display());
                                     Some(path)
                                 } else {
                                     None
@@ -60,9 +65,9 @@ pub fn discover_wasm_translators() -> Vec<Message> {
                     warn!(
                         "Failed to read dir entries in {}. {e}",
                         dir.to_string_lossy()
-                    )
+                    );
                 })
-                .unwrap_or_else(|_| vec![])
+                .unwrap_or_else(|()| vec![])
         })
         .filter_map(|file| {
             file.clone()
@@ -145,7 +150,7 @@ impl Translator<VarId, ScopeId, Message> for PluginTranslator {
                     self.file.to_string_lossy()
                 );
             })
-            .map(|s| s.to_string())
+            .map(ToString::to_string)
             .unwrap_or_default()
     }
 
@@ -158,7 +163,7 @@ impl Translator<VarId, ScopeId, Message> for PluginTranslator {
                     error!(
                         "Failed to set_wave_source on {}. {e}",
                         self.file.to_string_lossy()
-                    )
+                    );
                 })
                 .ok();
         }
@@ -259,7 +264,7 @@ host_fn!(current_dir() -> String {
         .and_then(|dir| {
             dir.to_str().ok_or_else(|| {
                 anyhow!("{} is not valid utf8", dir.to_string_lossy())
-            }).map(|s| s.to_string())
+            }).map(ToString::to_string)
         })
         .map_err(|e| extism::Error::msg(format!("{e:#}")))
 });

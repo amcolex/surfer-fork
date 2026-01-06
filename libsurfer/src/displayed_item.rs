@@ -4,6 +4,9 @@ use egui::{FontSelection, RichText, Style, WidgetText};
 use emath::Align;
 use epaint::text::LayoutJob;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+
+use crate::analog_signal_cache::AnalogCacheEntry;
 use surfer_translation_types::VariableInfo;
 
 use crate::config::SurferConfig;
@@ -33,6 +36,7 @@ pub struct DisplayedFieldRef {
 }
 
 impl DisplayedFieldRef {
+    #[must_use]
     pub fn without_field(&self) -> DisplayedFieldRef {
         DisplayedFieldRef {
             item: self.item,
@@ -67,6 +71,122 @@ pub struct FieldFormat {
     pub format: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+pub enum AnalogRenderStyle {
+    #[default]
+    Step,
+    Interpolated,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Default)]
+pub enum AnalogYAxisScale {
+    #[default]
+    Viewport,
+    Global,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq)]
+pub struct AnalogSettings {
+    pub render_style: AnalogRenderStyle,
+    pub y_axis_scale: AnalogYAxisScale,
+}
+
+impl AnalogSettings {
+    #[must_use]
+    pub fn step_viewport() -> Self {
+        Self {
+            render_style: AnalogRenderStyle::Step,
+            y_axis_scale: AnalogYAxisScale::Viewport,
+        }
+    }
+
+    #[must_use]
+    pub fn step_global() -> Self {
+        Self {
+            render_style: AnalogRenderStyle::Step,
+            y_axis_scale: AnalogYAxisScale::Global,
+        }
+    }
+
+    #[must_use]
+    pub fn interpolated_viewport() -> Self {
+        Self {
+            render_style: AnalogRenderStyle::Interpolated,
+            y_axis_scale: AnalogYAxisScale::Viewport,
+        }
+    }
+
+    #[must_use]
+    pub fn interpolated_global() -> Self {
+        Self {
+            render_style: AnalogRenderStyle::Interpolated,
+            y_axis_scale: AnalogYAxisScale::Global,
+        }
+    }
+}
+
+/// Per-variable analog state (settings + cache). Presence means enabled, None means disabled.
+/// NOTE: Clone is NOT derived - see manual impl below for undo/redo compatibility.
+#[derive(Serialize, Deserialize)]
+pub struct AnalogVarState {
+    pub settings: AnalogSettings,
+    #[serde(skip)]
+    pub cache: Option<Arc<AnalogCacheEntry>>,
+}
+
+impl std::fmt::Debug for AnalogVarState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AnalogVarState")
+    }
+}
+
+// Manual Clone: cache is NOT cloned to avoid holding refs in undo/redo stack.
+// When state is restored from undo/redo, caches are rebuilt on demand.
+impl Clone for AnalogVarState {
+    fn clone(&self) -> Self {
+        Self {
+            settings: self.settings,
+            cache: None, // Intentionally not cloned - rebuilt on demand
+        }
+    }
+}
+
+impl PartialEq for AnalogVarState {
+    fn eq(&self, other: &Self) -> bool {
+        self.settings == other.settings
+    }
+}
+
+impl AnalogVarState {
+    #[must_use]
+    pub fn new(settings: AnalogSettings) -> Self {
+        Self {
+            settings,
+            cache: None,
+        }
+    }
+
+    #[must_use]
+    pub fn step_viewport() -> Self {
+        Self::new(AnalogSettings::step_viewport())
+    }
+
+    #[must_use]
+    pub fn step_global() -> Self {
+        Self::new(AnalogSettings::step_global())
+    }
+
+    #[must_use]
+    pub fn interpolated_viewport() -> Self {
+        Self::new(AnalogSettings::interpolated_viewport())
+    }
+
+    #[must_use]
+    pub fn interpolated_global() -> Self {
+        Self::new(AnalogSettings::interpolated_global())
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct DisplayedVariable {
     pub variable_ref: VariableRef,
@@ -80,9 +200,11 @@ pub struct DisplayedVariable {
     pub format: Option<String>,
     pub field_formats: Vec<FieldFormat>,
     pub height_scaling_factor: Option<f32>,
+    pub analog: Option<AnalogVarState>,
 }
 
 impl DisplayedVariable {
+    #[must_use]
     pub fn get_format(&self, field: &[String]) -> Option<&String> {
         if field.is_empty() {
             self.format.as_ref()
@@ -95,6 +217,7 @@ impl DisplayedVariable {
     }
 
     /// Updates the variable after a new waveform has been loaded.
+    #[must_use]
     pub fn update(
         &self,
         new_waves: &WaveContainer,
@@ -114,6 +237,7 @@ impl DisplayedVariable {
         }
     }
 
+    #[must_use]
     pub fn into_placeholder(mut self) -> DisplayedPlaceholder {
         self.variable_ref.clear_id(); // placeholders do not refer to currently loaded variables
         DisplayedPlaceholder {
@@ -126,6 +250,7 @@ impl DisplayedVariable {
             format: self.format,
             field_formats: self.field_formats,
             height_scaling_factor: self.height_scaling_factor,
+            analog: self.analog,
         }
     }
 }
@@ -146,27 +271,27 @@ pub struct DisplayedMarker {
 }
 
 impl DisplayedMarker {
-    pub fn marker_text(&self, color: &Color32) -> WidgetText {
+    #[must_use]
+    pub fn marker_text(&self, color: Color32) -> WidgetText {
         let style = Style::default();
         let mut layout_job = LayoutJob::default();
         self.rich_text(color, &style, &mut layout_job);
         WidgetText::LayoutJob(layout_job.into())
     }
 
-    pub fn rich_text(&self, color: &Color32, style: &Style, layout_job: &mut LayoutJob) {
+    pub fn rich_text(&self, color: Color32, style: &Style, layout_job: &mut LayoutJob) {
         RichText::new(format!("{idx}: ", idx = self.idx))
-            .color(*color)
+            .color(color)
             .append_to(layout_job, style, FontSelection::Default, Align::Center);
         RichText::new(self.marker_name())
-            .color(*color)
+            .color(color)
             .italics()
             .append_to(layout_job, style, FontSelection::Default, Align::Center);
     }
 
     fn marker_name(&self) -> String {
         self.name
-            .as_ref()
-            .cloned()
+            .clone()
             .unwrap_or_else(|| DEFAULT_MARKER_NAME.to_string())
     }
 }
@@ -189,9 +314,11 @@ pub struct DisplayedPlaceholder {
     pub format: Option<String>,
     pub field_formats: Vec<FieldFormat>,
     pub height_scaling_factor: Option<f32>,
+    pub analog: Option<AnalogVarState>,
 }
 
 impl DisplayedPlaceholder {
+    #[must_use]
     pub fn into_variable(
         self,
         variable_info: VariableInfo,
@@ -208,6 +335,7 @@ impl DisplayedPlaceholder {
             format: self.format,
             field_formats: self.field_formats,
             height_scaling_factor: self.height_scaling_factor,
+            analog: self.analog,
         }
     }
 
@@ -268,6 +396,7 @@ impl DisplayedGroup {
 }
 
 impl DisplayedItem {
+    #[must_use]
     pub fn color(&self) -> Option<&str> {
         match self {
             DisplayedItem::Variable(variable) => variable.color.as_deref(),
@@ -280,18 +409,19 @@ impl DisplayedItem {
         }
     }
 
-    pub fn set_color(&mut self, color_name: Option<String>) {
+    pub fn set_color(&mut self, color_name: &Option<String>) {
         match self {
-            DisplayedItem::Variable(variable) => variable.color.clone_from(&color_name),
-            DisplayedItem::Divider(divider) => divider.color.clone_from(&color_name),
-            DisplayedItem::Marker(marker) => marker.color.clone_from(&color_name),
-            DisplayedItem::TimeLine(timeline) => timeline.color.clone_from(&color_name),
-            DisplayedItem::Placeholder(placeholder) => placeholder.color.clone_from(&color_name),
-            DisplayedItem::Stream(stream) => stream.color.clone_from(&color_name),
-            DisplayedItem::Group(group) => group.color.clone_from(&color_name),
+            DisplayedItem::Variable(variable) => variable.color.clone_from(color_name),
+            DisplayedItem::Divider(divider) => divider.color.clone_from(color_name),
+            DisplayedItem::Marker(marker) => marker.color.clone_from(color_name),
+            DisplayedItem::TimeLine(timeline) => timeline.color.clone_from(color_name),
+            DisplayedItem::Placeholder(placeholder) => placeholder.color.clone_from(color_name),
+            DisplayedItem::Stream(stream) => stream.color.clone_from(color_name),
+            DisplayedItem::Group(group) => group.color.clone_from(color_name),
         }
     }
 
+    #[must_use]
     pub fn name(&self) -> String {
         match self {
             DisplayedItem::Variable(variable) => variable
@@ -324,10 +454,10 @@ impl DisplayedItem {
         }
     }
 
-    /// Widget displayed in variable list for the wave form, may include additional info compared to name()
+    /// Widget displayed in variable list for the wave form, may include additional info compared to `name()`
     pub fn add_to_layout_job(
         &self,
-        color: &Color32,
+        color: Color32,
         style: &Style,
         layout_job: &mut LayoutJob,
         field: Option<&FieldRef>,
@@ -335,27 +465,24 @@ impl DisplayedItem {
     ) {
         match self {
             DisplayedItem::Variable(_) => {
-                let name = if let Some(field) = field {
-                    if let Some(last) = field.field.last() {
-                        last.clone()
-                    } else {
-                        self.name()
-                    }
-                } else {
-                    self.name()
-                };
+                let name = field
+                    .and_then(|f| f.field.last())
+                    .cloned()
+                    .unwrap_or_else(|| self.name());
                 RichText::new(name)
-                    .color(*color)
+                    .color(color)
                     .line_height(Some(
                         config.layout.waveforms_line_height * self.height_scaling_factor(),
                     ))
                     .append_to(layout_job, style, FontSelection::Default, Align::Center);
             }
             DisplayedItem::TimeLine(_) | DisplayedItem::Divider(_) => {
-                RichText::new(self.name())
-                    .color(*color)
-                    .italics()
-                    .append_to(layout_job, style, FontSelection::Default, Align::Center);
+                RichText::new(self.name()).color(color).italics().append_to(
+                    layout_job,
+                    style,
+                    FontSelection::Default,
+                    Align::Center,
+                );
             }
             DisplayedItem::Marker(marker) => {
                 marker.rich_text(color, style, layout_job);
@@ -366,18 +493,18 @@ impl DisplayedItem {
                     .as_ref()
                     .unwrap_or(&placeholder.display_name);
                 RichText::new("Not available: ".to_owned() + s)
-                    .color(*color)
+                    .color(color)
                     .italics()
                     .append_to(layout_job, style, FontSelection::Default, Align::Center);
             }
             DisplayedItem::Stream(stream) => {
                 RichText::new(format!("{}{}", self.name(), "\n".repeat(stream.rows - 1)))
-                    .color(*color)
+                    .color(color)
                     .line_height(Some(config.layout.transactions_line_height))
                     .append_to(layout_job, style, FontSelection::Default, Align::Center);
             }
             DisplayedItem::Group(group) => {
-                group.rich_text(*color, style, layout_job);
+                group.rich_text(color, style, layout_job);
             }
         }
     }
@@ -408,6 +535,7 @@ impl DisplayedItem {
         }
     }
 
+    #[must_use]
     pub fn has_overwritten_name(&self) -> bool {
         match self {
             DisplayedItem::Variable(variable) => variable.manual_name.is_some(),
@@ -420,6 +548,7 @@ impl DisplayedItem {
         }
     }
 
+    #[must_use]
     pub fn background_color(&self) -> Option<&str> {
         match self {
             DisplayedItem::Variable(variable) => variable.background_color.as_deref(),
@@ -432,32 +561,33 @@ impl DisplayedItem {
         }
     }
 
-    pub fn set_background_color(&mut self, color_name: Option<String>) {
+    pub fn set_background_color(&mut self, color_name: &Option<String>) {
         match self {
             DisplayedItem::Variable(variable) => {
-                variable.background_color.clone_from(&color_name);
+                variable.background_color.clone_from(color_name);
             }
             DisplayedItem::Divider(divider) => {
-                divider.background_color.clone_from(&color_name);
+                divider.background_color.clone_from(color_name);
             }
             DisplayedItem::Marker(marker) => {
-                marker.background_color.clone_from(&color_name);
+                marker.background_color.clone_from(color_name);
             }
             DisplayedItem::TimeLine(timeline) => {
-                timeline.background_color.clone_from(&color_name);
+                timeline.background_color.clone_from(color_name);
             }
             DisplayedItem::Placeholder(placeholder) => {
-                placeholder.background_color.clone_from(&color_name);
+                placeholder.background_color.clone_from(color_name);
             }
             DisplayedItem::Stream(stream) => {
-                stream.background_color.clone_from(&color_name);
+                stream.background_color.clone_from(color_name);
             }
             DisplayedItem::Group(group) => {
-                group.background_color.clone_from(&color_name);
+                group.background_color.clone_from(color_name);
             }
         }
     }
 
+    #[must_use]
     pub fn height_scaling_factor(&self) -> f32 {
         match self {
             DisplayedItem::Variable(variable) => variable.height_scaling_factor,
@@ -471,7 +601,7 @@ impl DisplayedItem {
         match self {
             DisplayedItem::Variable(variable) => variable.height_scaling_factor = Some(scale),
             DisplayedItem::Placeholder(placeholder) => {
-                placeholder.height_scaling_factor = Some(scale)
+                placeholder.height_scaling_factor = Some(scale);
             }
             _ => {}
         }

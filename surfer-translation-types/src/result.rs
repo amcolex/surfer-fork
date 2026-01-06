@@ -29,7 +29,7 @@ impl TranslationResult {
 pub enum ValueRepr {
     Bit(char),
     /// The value is `.0` raw bits, and can be translated by further translators
-    Bits(u64, String),
+    Bits(u32, String),
     /// The value is exactly the specified string
     String(String),
     /// Represent the value as (f1, f2, f3...)
@@ -48,6 +48,7 @@ pub enum ValueRepr {
     /// The variable value is not present. This is used to draw variables which are
     /// validated by other variables.
     NotPresent,
+    Event,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -82,7 +83,7 @@ pub struct SubFieldTranslationResult {
 }
 
 impl SubFieldTranslationResult {
-    pub fn new(name: impl ToString, result: TranslationResult) -> Self {
+    pub fn new(name: &impl ToString, result: TranslationResult) -> Self {
         SubFieldTranslationResult {
             name: name.to_string(),
             result,
@@ -97,6 +98,7 @@ pub struct TranslatedValue {
 }
 
 impl TranslatedValue {
+    #[must_use]
     pub fn from_basic_translate(result: (String, ValueKind)) -> Self {
         TranslatedValue {
             value: result.0,
@@ -104,7 +106,7 @@ impl TranslatedValue {
         }
     }
 
-    pub fn new(value: impl ToString, kind: ValueKind) -> Self {
+    pub fn new(value: &impl ToString, kind: ValueKind) -> Self {
         TranslatedValue {
             value: value.to_string(),
             kind,

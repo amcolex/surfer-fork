@@ -24,7 +24,8 @@ fn find_transaction<'a>(
         .find(|transaction| transaction.get_tx_id() == tx_ref.id)
 }
 
-pub fn variable_tooltip_text(meta: &Option<VariableMeta>, variable: &VariableRef) -> String {
+#[must_use]
+pub fn variable_tooltip_text(meta: Option<&VariableMeta>, variable: &VariableRef) -> String {
     if let Some(meta) = meta {
         format!(
             "{}\nNum bits: {}\nType: {}\nDirection: {}",
@@ -43,11 +44,12 @@ pub fn variable_tooltip_text(meta: &Option<VariableMeta>, variable: &VariableRef
     }
 }
 
+#[must_use]
 pub fn scope_tooltip_text(wave: &WaveData, scope: &ScopeRef, include_parameters: bool) -> String {
     let mut parts = vec![format!("{scope}")];
     if let Some(wave_container) = &wave.inner.as_waves() {
         if include_parameters && let Some(waves) = &wave.inner.as_waves() {
-            for param in waves.parameters_in_scope(scope).iter() {
+            for param in &waves.parameters_in_scope(scope) {
                 let value = wave_container
                     .query_variable(param, &BigUint::ZERO)
                     .ok()
@@ -64,6 +66,7 @@ pub fn scope_tooltip_text(wave: &WaveData, scope: &ScopeRef, include_parameters:
     parts.join("\n")
 }
 
+#[must_use]
 pub fn handle_transaction_tooltip(
     response: Response,
     waves: &WaveData,
@@ -85,7 +88,7 @@ pub fn handle_transaction_tooltip(
             // is most likely still a better approach.
             // Feel free to use some Rust magic to only do it once though...
             if let Some(tx) = find_transaction(waves, gen_ref, tx_ref) {
-                transaction_tooltip_table(ui, tx)
+                transaction_tooltip_table(ui, tx);
             } else {
                 ui.label("Transaction details unavailable");
             }
@@ -110,8 +113,7 @@ fn transaction_tooltip_text(waves: &WaveData, tx: &Transaction) -> String {
             .inner
             .as_transactions()
             .and_then(|t| t.get_generator(tx.get_gen_id()))
-            .map(|g| g.name.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
+            .map_or_else(|| "unknown".to_string(), |g| g.name.clone()),
     )
 }
 

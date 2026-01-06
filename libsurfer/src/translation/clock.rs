@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use surfer_translation_types::{TranslationResult, Translator, VariableInfo, VariableValue};
 
 use crate::message::Message;
@@ -10,9 +11,10 @@ pub struct ClockTranslator {
 }
 
 impl ClockTranslator {
+    #[must_use]
     pub fn new() -> Self {
         Self {
-            inner: AnyTranslator::Basic(Box::new(BitTranslator {})),
+            inner: AnyTranslator::Basic(Arc::new(BitTranslator {})),
         }
     }
 }

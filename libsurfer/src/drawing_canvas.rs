@@ -6,21 +6,24 @@ use eyre::WrapErr;
 use ftr_parser::types::{Transaction, TxGenerator};
 use itertools::Itertools;
 use num::bigint::{ToBigInt, ToBigUint};
-use num::{BigInt, BigUint, ToPrimitive};
+use num::{BigInt, BigUint, One, ToPrimitive, Zero};
 use rayon::prelude::{IntoParallelRefIterator, ParallelBridge, ParallelIterator};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::f32::consts::PI;
 use surfer_translation_types::{
-    SubFieldFlatTranslationResult, TranslatedValue, ValueKind, VariableInfo, VariableType,
+    SubFieldFlatTranslationResult, TranslatedValue, ValueKind, VariableInfo, VariableValue,
 };
 use tracing::{error, warn};
 
 use crate::CachedDrawData::TransactionDrawData;
+use crate::analog_renderer::{AnalogDrawingCommand, variable_analog_draw_commands};
 use crate::clock_highlighting::draw_clock_edge_marks;
 use crate::config::SurferTheme;
 use crate::data_container::DataContainer;
-use crate::displayed_item::{DisplayedFieldRef, DisplayedItemRef, DisplayedVariable};
+use crate::displayed_item::{
+    AnalogSettings, DisplayedFieldRef, DisplayedItemRef, DisplayedVariable,
+};
 use crate::time::get_ticks;
 use crate::tooltips::handle_transaction_tooltip;
 use crate::transaction_container::{TransactionRef, TransactionStreamRef};
@@ -34,44 +37,94 @@ use crate::{
     displayed_item::DisplayedItem,
 };
 
+/// Information about values to mimic dinotrace's special drawing of all-0 and all-1 values
+#[derive(Clone, Copy)]
+enum DinotraceDrawingStyle {
+    Normal,
+    AllZeros,
+    AllOnes,
+}
+
+impl DinotraceDrawingStyle {
+    fn from_value(val: &VariableValue, num_bits: Option<u32>) -> Self {
+        match val {
+            VariableValue::BigUint(u) if u.is_zero() => DinotraceDrawingStyle::AllZeros,
+            VariableValue::BigUint(u)
+                if num_bits.is_some_and(|bits| u.count_ones() == u64::from(bits)) =>
+            {
+                DinotraceDrawingStyle::AllOnes
+            }
+            VariableValue::BigUint(_) => DinotraceDrawingStyle::Normal,
+            VariableValue::String(_) => DinotraceDrawingStyle::Normal,
+        }
+    }
+}
+
 pub struct DrawnRegion {
-    inner: Option<TranslatedValue>,
+    pub inner: Option<TranslatedValue>,
     /// True if a transition should be drawn even if there is no change in the value
     /// between the previous and next pixels. Only used by the bool drawing logic to
     /// draw draw a vertical line and prevent apparent aliasing
     force_anti_alias: bool,
+    dinotrace_style: DinotraceDrawingStyle,
 }
 
+pub enum DrawingCommands {
+    Digital(DigitalDrawingCommands),
+    Analog(AnalogDrawingCommands),
+}
+
+pub enum AnalogDrawingCommands {
+    /// Cache is still being built
+    Loading,
+    /// Cache is ready with drawing data
+    Ready {
+        /// Viewport min/max for the visible signal range (used for Y-axis scaling)
+        viewport_min: f64,
+        viewport_max: f64,
+        /// Global min/max across entire signal (used for global Y-axis scaling)
+        global_min: f64,
+        global_max: f64,
+        /// Per-pixel drawing commands with flat spans and ranges
+        values: Vec<AnalogDrawingCommand>,
+        /// Pixel position of timestamp 0 (start of signal data).
+        min_valid_pixel: f32,
+        /// Pixel position of last timestamp (end of signal data).
+        max_valid_pixel: f32,
+        analog_settings: AnalogSettings,
+    },
+}
+#[derive(Clone, PartialEq, Debug)]
+pub enum DigitalDrawingType {
+    Bool,
+    Clock,
+    Event,
+    Vector,
+}
+
+impl From<&VariableInfo> for DigitalDrawingType {
+    fn from(info: &VariableInfo) -> Self {
+        match info {
+            VariableInfo::Bool => DigitalDrawingType::Bool,
+            VariableInfo::Clock => DigitalDrawingType::Clock,
+            VariableInfo::Event => DigitalDrawingType::Event,
+            _ => DigitalDrawingType::Vector,
+        }
+    }
+}
 /// List of values to draw for a variable. It is an ordered list of values that should
 /// be drawn at the *start time* until the *start time* of the next value
-pub struct DrawingCommands {
-    is_bool: bool,
-    is_clock: bool,
-    values: Vec<(f32, DrawnRegion)>,
+pub struct DigitalDrawingCommands {
+    pub drawing_type: DigitalDrawingType,
+    pub values: Vec<(f32, DrawnRegion)>,
 }
 
-impl DrawingCommands {
-    pub fn new_bool() -> Self {
-        Self {
+impl DigitalDrawingCommands {
+    #[must_use]
+    pub fn new_from_variable_info(info: &VariableInfo) -> Self {
+        DigitalDrawingCommands {
+            drawing_type: DigitalDrawingType::from(info),
             values: vec![],
-            is_bool: true,
-            is_clock: false,
-        }
-    }
-
-    pub fn new_clock() -> Self {
-        Self {
-            values: vec![],
-            is_bool: true,
-            is_clock: true,
-        }
-    }
-
-    pub fn new_wide() -> Self {
-        Self {
-            values: vec![],
-            is_bool: false,
-            is_clock: false,
         }
     }
 
@@ -86,13 +139,16 @@ pub struct TxDrawingCommands {
     gen_ref: TransactionStreamRef, // makes it easier to later access the actual Transaction object
 }
 
-struct VariableDrawCommands {
-    clock_edges: Vec<f32>,
-    display_id: DisplayedItemRef,
-    local_commands: HashMap<Vec<String>, DrawingCommands>,
-    local_msgs: Vec<Message>,
+pub(crate) struct VariableDrawCommands {
+    pub(crate) clock_edges: Vec<f32>,
+    pub(crate) display_id: DisplayedItemRef,
+    pub(crate) local_commands: HashMap<Vec<String>, DrawingCommands>,
+    pub(crate) local_msgs: Vec<Message>,
 }
 
+/// Common setup for variable draw commands: extracts metadata and determines rendering mode.
+/// Routes to either analog or digital command generation.
+#[allow(clippy::too_many_arguments)]
 fn variable_draw_commands(
     displayed_variable: &DisplayedVariable,
     display_id: DisplayedItemRef,
@@ -101,12 +157,16 @@ fn variable_draw_commands(
     translators: &TranslatorList,
     view_width: f32,
     viewport_idx: usize,
+    use_dinotrace_style: bool,
 ) -> Option<VariableDrawCommands> {
-    let mut clock_edges = vec![];
-    let mut local_msgs = vec![];
-
-    // Extract wave_container once to avoid repeated as_waves().unwrap() calls
     let wave_container = waves.inner.as_waves()?;
+
+    let signal_id = wave_container
+        .signal_id(&displayed_variable.variable_ref)
+        .ok()?;
+    if !wave_container.is_signal_loaded(&signal_id) {
+        return None;
+    }
 
     let meta = match wave_container
         .variable_meta(&displayed_variable.variable_ref)
@@ -120,12 +180,64 @@ fn variable_draw_commands(
     };
 
     let displayed_field_ref: DisplayedFieldRef = display_id.into();
-    let translator = waves.variable_translator(&displayed_field_ref, translators);
-    // we need to get the variable info here to get the correct info for aliases
+    let translator = waves.variable_translator_with_meta(&displayed_field_ref, translators, &meta);
     let info = translator.variable_info(&meta).unwrap();
-    let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
 
-    let mut local_commands: HashMap<Vec<_>, _> = HashMap::new();
+    let is_analog_mode = displayed_variable.analog.is_some();
+    let is_bool = matches!(
+        info,
+        VariableInfo::Bool | VariableInfo::Clock | VariableInfo::Event
+    );
+
+    if is_analog_mode && !is_bool {
+        variable_analog_draw_commands(
+            displayed_variable,
+            display_id,
+            waves,
+            translators,
+            view_width,
+            viewport_idx,
+        )
+    } else {
+        variable_digital_draw_commands(
+            displayed_variable,
+            display_id,
+            timestamps,
+            waves,
+            translators,
+            wave_container,
+            &meta,
+            translator,
+            &info,
+            view_width,
+            viewport_idx,
+            use_dinotrace_style,
+        )
+    }
+}
+
+/// Generate draw commands for digital waveform rendering.
+#[allow(clippy::too_many_arguments)]
+fn variable_digital_draw_commands(
+    displayed_variable: &DisplayedVariable,
+    display_id: DisplayedItemRef,
+    timestamps: &[(f32, num::BigUint)],
+    waves: &WaveData,
+    translators: &TranslatorList,
+    wave_container: &crate::wave_container::WaveContainer,
+    meta: &crate::wave_container::VariableMeta,
+    translator: &crate::translation::DynTranslator,
+    info: &VariableInfo,
+    view_width: f32,
+    viewport_idx: usize,
+    use_dinotrace_style: bool,
+) -> Option<VariableDrawCommands> {
+    let mut clock_edges = vec![];
+    let mut local_msgs = vec![];
+    let displayed_field_ref: DisplayedFieldRef = display_id.into();
+    let num_timestamps = waves.num_timestamps().unwrap_or_else(BigInt::one);
+
+    let mut local_commands: HashMap<Vec<String>, DigitalDrawingCommands> = HashMap::new();
 
     let mut prev_values = HashMap::new();
 
@@ -169,7 +281,7 @@ fn variable_draw_commands(
                 current: Some((change_time, val)),
                 ..
             })) => (change_time, val),
-            Ok(Some(QueryResult { current: None, .. })) | Ok(None) => continue,
+            Ok(Some(QueryResult { current: None, .. }) | None) => continue,
             Err(e) => {
                 error!("Variable query error {e:#?}");
                 continue;
@@ -182,7 +294,7 @@ fn variable_draw_commands(
             continue;
         }
 
-        let translation_result = match translator.translate(&meta, &val) {
+        let translation_result = match translator.translate(meta, &val) {
             Ok(result) => result,
             Err(e) => {
                 error!(
@@ -202,13 +314,15 @@ fn variable_draw_commands(
             translators,
         );
 
+        let dinotrace_style = if use_dinotrace_style {
+            DinotraceDrawingStyle::from_value(&val, meta.num_bits)
+        } else {
+            DinotraceDrawingStyle::Normal
+        };
+
         for SubFieldFlatTranslationResult { names, value } in fields {
             let entry = local_commands.entry(names.clone()).or_insert_with(|| {
-                match info.get_subinfo(&names) {
-                    VariableInfo::Bool => DrawingCommands::new_bool(),
-                    VariableInfo::Clock => DrawingCommands::new_clock(),
-                    _ => DrawingCommands::new_wide(),
-                }
+                DigitalDrawingCommands::new_from_variable_info(info.get_subinfo(&names))
             });
 
             let prev = prev_values.get(&names);
@@ -230,7 +344,7 @@ fn variable_draw_commands(
                     .or_insert(value.clone())
                     .clone_from(&value);
 
-                if let VariableInfo::Clock = info.get_subinfo(&names) {
+                if entry.drawing_type == DigitalDrawingType::Clock {
                     match value.as_ref().map(|result| result.value.as_str()) {
                         Some("1") => {
                             if !is_last_timestep && !is_first_timestep {
@@ -247,6 +361,7 @@ fn variable_draw_commands(
                     DrawnRegion {
                         inner: value,
                         force_anti_alias: anti_alias && !new_value,
+                        dinotrace_style,
                     },
                 ));
             }
@@ -255,7 +370,10 @@ fn variable_draw_commands(
     Some(VariableDrawCommands {
         clock_edges,
         display_id,
-        local_commands,
+        local_commands: local_commands
+            .into_iter()
+            .map(|(k, v)| (k, DrawingCommands::Digital(v)))
+            .collect(),
         local_msgs,
     })
 }
@@ -308,7 +426,7 @@ impl SystemState {
     ) -> Option<CachedDrawData> {
         let mut draw_commands = HashMap::new();
 
-        let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = waves.num_timestamps().unwrap_or_else(BigInt::one);
         let max_time = num_timestamps.to_f64().unwrap_or(f64::MAX);
         let mut clock_edges = vec![];
         // Compute which timestamp to draw in each pixel. We'll draw from -extra_draw_width to
@@ -317,7 +435,7 @@ impl SystemState {
             .par_bridge()
             .filter_map(|x| {
                 let time = waves.viewports[viewport_idx]
-                    .as_absolute_time(x as f64, frame_width, &num_timestamps)
+                    .as_absolute_time(f64::from(x), frame_width, &num_timestamps)
                     .0;
                 if time < 0. || time > max_time {
                     None
@@ -328,6 +446,7 @@ impl SystemState {
             .collect::<Vec<_>>();
         timestamps.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
+        let use_dinotrace_style = self.use_dinotrace_style();
         let translators = &self.translators;
         let commands = waves
             .items_tree
@@ -351,6 +470,7 @@ impl SystemState {
                     translators,
                     frame_width,
                     viewport_idx,
+                    use_dinotrace_style,
                 )
             })
             .collect::<Vec<_>>();
@@ -374,6 +494,7 @@ impl SystemState {
             }
             clock_edges.append(&mut new_clock_edges);
         }
+
         let ticks = get_ticks(
             &waves.viewports[viewport_idx],
             &waves.inner.metadata().timescale,
@@ -382,7 +503,7 @@ impl SystemState {
             &self.user.wanted_timeunit,
             &self.get_time_format(),
             &self.user.config,
-            &waves.num_timestamps().unwrap_or(1.into()),
+            &waves.num_timestamps().unwrap_or_else(BigInt::one),
         );
 
         Some(CachedDrawData::WaveDrawData(CachedWaveDrawData {
@@ -409,7 +530,7 @@ impl SystemState {
         let mut new_focused_tx: Option<&Transaction> = None;
 
         let viewport = waves.viewports[viewport_idx];
-        let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = waves.num_timestamps().unwrap_or_else(BigInt::one);
 
         let displayed_streams = waves
             .items_tree
@@ -468,14 +589,15 @@ impl SystemState {
 
             for generator in &generators {
                 // find first visible transaction
-                let first_visible_transaction_index = match generator
-                    .transactions
-                    .binary_search_by_key(&first_visible_timestamp, |tx| tx.get_end_time())
-                {
-                    Ok(i) => i,
-                    Err(i) => i,
-                }
-                .saturating_sub(1);
+                let first_visible_transaction_index =
+                    match generator.transactions.binary_search_by_key(
+                        &first_visible_timestamp,
+                        ftr_parser::types::Transaction::get_end_time,
+                    ) {
+                        Ok(i) => i,
+                        Err(i) => i,
+                    }
+                    .saturating_sub(1);
                 let transactions = generator
                     .transactions
                     .iter()
@@ -624,7 +746,7 @@ impl SystemState {
         let frame_width = response.rect.width();
         let pointer_pos_global = ui.input(|i| i.pointer.interact_pos());
         let pointer_pos_canvas = pointer_pos_global.map(|p| self.transform_pos(to_screen, p, ui));
-        let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = waves.num_timestamps().unwrap_or_else(BigInt::one);
 
         if ui.ui_contains_pointer() {
             let pointer_pos = pointer_pos_global.unwrap();
@@ -735,7 +857,7 @@ impl SystemState {
         {
             // Get background color
             let background_color =
-                &self.get_background_color(waves, drawing_info, drawing_info.vidx(), item_count);
+                self.get_background_color(waves, drawing_info.vidx(), item_count);
 
             self.draw_background(
                 drawing_info,
@@ -752,7 +874,7 @@ impl SystemState {
 
         match &self.draw_data.borrow()[viewport_idx] {
             Some(CachedDrawData::WaveDrawData(draw_data)) => {
-                self.draw_wave_data(waves, draw_data, &mut ctx);
+                self.draw_wave_data(waves, draw_data, frame_width, &mut ctx);
             }
             Some(CachedDrawData::TransactionDrawData(draw_data)) => {
                 self.draw_transaction_data(
@@ -833,13 +955,14 @@ impl SystemState {
             &mut ctx,
             viewport_idx,
         );
-        self.handle_canvas_context_menu(response, waves, to_screen, &mut ctx, msgs, viewport_idx);
+        self.handle_canvas_context_menu(&response, waves, to_screen, &mut ctx, msgs, viewport_idx);
     }
 
     fn draw_wave_data(
         &self,
         waves: &WaveData,
         draw_data: &CachedWaveDrawData,
+        frame_width: f32,
         ctx: &mut DrawingContext,
     ) {
         let clock_edges = &draw_data.clock_edges;
@@ -875,7 +998,6 @@ impl SystemState {
             .sorted_by_key(|o| o.top() as i32)
             .enumerate()
         {
-            let vidx = drawing_info.vidx();
             // We draw in absolute coords, but the variable offset in the y
             // direction is also in absolute coordinates, so we need to
             // compensate for that
@@ -892,55 +1014,106 @@ impl SystemState {
             match drawing_info {
                 ItemDrawingInfo::Variable(variable_info) => {
                     if let Some(commands) = draw_commands.get(&variable_info.displayed_field_ref) {
-                        // Get background color and determine best text color
-                        let background_color =
-                            self.get_background_color(waves, drawing_info, vidx, item_count);
-                        let text_color = self
-                            .user
-                            .config
-                            .theme
-                            .get_best_text_color(&background_color);
-                        let height_scaling_factor = displayed_item
-                            .map(super::displayed_item::DisplayedItem::height_scaling_factor)
-                            .unwrap_or(1.0);
+                        let height_scaling_factor = displayed_item.map_or(
+                            1.0,
+                            super::displayed_item::DisplayedItem::height_scaling_factor,
+                        );
 
-                        let color = *color.unwrap_or_else(|| {
+                        let color = color.unwrap_or_else(|| {
                             if let Some(DisplayedItem::Variable(variable)) = displayed_item {
                                 waves
                                     .inner
                                     .as_waves()
                                     .and_then(|w| w.variable_meta(&variable.variable_ref).ok())
-                                    .and_then(|meta| meta.variable_type)
-                                    .and_then(|var_type| {
-                                        (var_type == VariableType::VCDParameter)
-                                            .then_some(&self.user.config.theme.variable_parameter)
+                                    .and_then(|meta| {
+                                        if meta.is_event() {
+                                            Some(self.user.config.theme.variable_event)
+                                        } else if meta.is_parameter() {
+                                            Some(self.user.config.theme.variable_parameter)
+                                        } else {
+                                            None
+                                        }
                                     })
-                                    .unwrap_or(&self.user.config.theme.variable_default)
+                                    .unwrap_or(self.user.config.theme.variable_default)
                             } else {
-                                &self.user.config.theme.variable_default
+                                self.user.config.theme.variable_default
                             }
                         });
-                        for (old, new) in commands.values.iter().zip(commands.values.iter().skip(1))
-                        {
-                            if commands.is_bool {
-                                self.draw_bool_transition(
-                                    (old, new),
-                                    new.1.force_anti_alias,
+                        match commands {
+                            DrawingCommands::Digital(digital_commands) => {
+                                match digital_commands.drawing_type {
+                                    DigitalDrawingType::Bool | DigitalDrawingType::Clock => {
+                                        let draw_clock = (digital_commands.drawing_type
+                                            == DigitalDrawingType::Clock)
+                                            && draw_clock_rising_marker;
+                                        let draw_background = self.fill_high_values();
+                                        for (old, new) in digital_commands
+                                            .values
+                                            .iter()
+                                            .zip(digital_commands.values.iter().skip(1))
+                                        {
+                                            self.draw_bool_transition(
+                                                (old, new),
+                                                new.1.force_anti_alias,
+                                                color,
+                                                y_offset,
+                                                height_scaling_factor,
+                                                draw_clock,
+                                                draw_background,
+                                                ctx,
+                                            );
+                                        }
+                                    }
+                                    DigitalDrawingType::Event => {
+                                        for event in &digital_commands.values {
+                                            self.draw_event(
+                                                event,
+                                                color,
+                                                y_offset,
+                                                height_scaling_factor,
+                                                ctx,
+                                            );
+                                        }
+                                    }
+                                    DigitalDrawingType::Vector => {
+                                        // Get background color and determine best text color
+                                        let background_color = self.get_background_color(
+                                            waves,
+                                            drawing_info.vidx(),
+                                            item_count,
+                                        );
+
+                                        let text_color = self
+                                            .user
+                                            .config
+                                            .theme
+                                            .get_best_text_color(background_color);
+
+                                        for (old, new) in digital_commands
+                                            .values
+                                            .iter()
+                                            .zip(digital_commands.values.iter().skip(1))
+                                        {
+                                            self.draw_region(
+                                                (old, new),
+                                                color,
+                                                y_offset,
+                                                height_scaling_factor,
+                                                ctx,
+                                                text_color,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            DrawingCommands::Analog(analog_commands) => {
+                                crate::analog_renderer::draw_analog(
+                                    analog_commands,
                                     color,
                                     y_offset,
                                     height_scaling_factor,
-                                    commands.is_clock && draw_clock_rising_marker,
-                                    self.fill_high_values(),
+                                    frame_width,
                                     ctx,
-                                );
-                            } else {
-                                self.draw_region(
-                                    (old, new),
-                                    color,
-                                    y_offset,
-                                    height_scaling_factor,
-                                    ctx,
-                                    *text_color,
                                 );
                             }
                         }
@@ -954,10 +1127,9 @@ impl SystemState {
                         self.user
                             .config
                             .theme
-                            .get_best_text_color(&self.get_background_color(
+                            .get_best_text_color(self.get_background_color(
                                 waves,
-                                drawing_info,
-                                vidx,
+                                drawing_info.vidx(),
                                 item_count,
                             )),
                     );
@@ -1006,7 +1178,7 @@ impl SystemState {
             &self.user.wanted_timeunit,
             &self.get_time_format(),
             &self.user.config,
-            &waves.num_timestamps().unwrap_or(1.into()),
+            &waves.num_timestamps().unwrap_or_else(BigInt::one),
         );
 
         if !ticks.is_empty() && self.show_ticks() {
@@ -1024,7 +1196,6 @@ impl SystemState {
             .sorted_by_key(|o| o.top() as i32)
             .enumerate()
         {
-            let vidx = drawing_info.vidx();
             let y_offset = drawing_info.top() - zero_y;
 
             let displayed_item = waves
@@ -1034,7 +1205,7 @@ impl SystemState {
             let color = displayed_item
                 .and_then(super::displayed_item::DisplayedItem::color)
                 .and_then(|color| self.user.config.theme.get_color(color));
-            let tx_color = color.unwrap_or(&self.user.config.theme.transaction_default);
+            let tx_color = color.unwrap_or(self.user.config.theme.transaction_default);
             // Draws the surrounding border of the stream
             let border_stroke = Stroke::new(
                 self.user.config.theme.linewidth,
@@ -1057,7 +1228,7 @@ impl SystemState {
                                 let min = (ctx.to_screen)(min.x, y_offset + min.y);
                                 let max = (ctx.to_screen)(max.x, y_offset + max.y);
 
-                                let start = Pos2::new(min.x, (min.y + max.y) / 2.);
+                                let start = Pos2::new(min.x, f32::midpoint(min.y, max.y));
 
                                 let is_transaction_focused = waves
                                     .focused_transaction
@@ -1100,7 +1271,7 @@ impl SystemState {
                                             255 - tx_color.b(),
                                         )
                                     } else {
-                                        *tx_color
+                                        tx_color
                                     };
 
                                     let stroke =
@@ -1139,10 +1310,9 @@ impl SystemState {
                         self.user
                             .config
                             .theme
-                            .get_best_text_color(&self.get_background_color(
+                            .get_best_text_color(self.get_background_color(
                                 waves,
-                                drawing_info,
-                                vidx,
+                                drawing_info.vidx(),
                                 item_count,
                             )),
                     );
@@ -1166,13 +1336,12 @@ impl SystemState {
         // Draws the relations of the focused transaction
         if let Some(focused_pos) = focused_transaction_start {
             let path_stroke = PathStroke::from(&ctx.theme.relation_arrow.style);
-            let head_stroke = Stroke::from(&ctx.theme.relation_arrow.style);
             for start_pos in inc_relation_starts {
-                self.draw_arrow(start_pos, focused_pos, ctx, &path_stroke, &head_stroke);
+                self.draw_arrow(start_pos, focused_pos, ctx, &path_stroke);
             }
 
             for end_pos in out_relation_starts {
-                self.draw_arrow(focused_pos, end_pos, ctx, &path_stroke, &head_stroke);
+                self.draw_arrow(focused_pos, end_pos, ctx, &path_stroke);
             }
         }
     }
@@ -1188,11 +1357,6 @@ impl SystemState {
     ) {
         if let Some(prev_result) = &prev_region.inner {
             let color = prev_result.kind.color(user_color, ctx.theme);
-            let stroke = Stroke {
-                color,
-                width: self.user.config.theme.linewidth,
-            };
-
             let transition_width = (new_x - old_x).min(ctx.theme.vector_transition_width);
 
             let trace_coords =
@@ -1217,8 +1381,38 @@ impl SystemState {
                     PathStroke::NONE,
                 ));
             }
+            match prev_region.dinotrace_style {
+                DinotraceDrawingStyle::Normal => {
+                    let stroke = Stroke {
+                        color,
+                        width: self.user.config.theme.linewidth,
+                    };
 
-            ctx.painter.add(PathShape::line(points, stroke));
+                    ctx.painter.add(PathShape::line(points, stroke));
+                }
+                DinotraceDrawingStyle::AllOnes => {
+                    let stroke_thick = Stroke {
+                        color,
+                        width: self.user.config.theme.thick_linewidth,
+                    };
+                    let stroke = Stroke {
+                        color,
+                        width: self.user.config.theme.linewidth,
+                    };
+                    ctx.painter
+                        .add(PathShape::line(points[0..4].to_vec(), stroke_thick));
+                    ctx.painter
+                        .add(PathShape::line(points[3..7].to_vec(), stroke));
+                }
+                DinotraceDrawingStyle::AllZeros => {
+                    let stroke_thick = Stroke {
+                        color,
+                        width: self.user.config.theme.thick_linewidth,
+                    };
+                    ctx.painter
+                        .add(PathShape::line(points[3..7].to_vec(), stroke_thick));
+                }
+            }
 
             let text_size = ctx.cfg.text_size;
             let char_width = text_size * (20. / 31.);
@@ -1329,15 +1523,43 @@ impl SystemState {
         }
     }
 
-    /// Draws a curvy arrow from `start` to `end`.
-    fn draw_arrow(
+    fn draw_event(
         &self,
-        start: Pos2,
-        end: Pos2,
-        ctx: &DrawingContext,
-        path_stroke: &PathStroke,
-        head_stroke: &Stroke,
+        (x, prev_region): &(f32, DrawnRegion),
+        color: Color32,
+        offset: f32,
+        height_scaling_factor: f32,
+        ctx: &mut DrawingContext,
     ) {
+        if prev_region.inner.is_some() {
+            let trace_coords =
+                |x, y| (ctx.to_screen)(x, y * ctx.cfg.line_height * height_scaling_factor + offset);
+
+            let stroke = Stroke {
+                color,
+                width: self.user.config.theme.linewidth,
+            };
+
+            // Draw both at old_x and new_x lines until the drawing commands are reworked to deal with this as a special case
+            // Otherwise, not drawing the old_x (new_x) value will cause the first (last) event to not be drawn
+            let top = trace_coords(*x, 0.0);
+            ctx.painter
+                .add(PathShape::line(vec![top, trace_coords(*x, 1.0)], stroke));
+
+            ctx.painter.add(PathShape::convex_polygon(
+                vec![
+                    trace_coords(*x - 2.5, 0.2),
+                    top,
+                    trace_coords(*x + 2.5, 0.2),
+                ],
+                color,
+                stroke,
+            ));
+        }
+    }
+
+    /// Draws a curvy arrow from `start` to `end`.
+    fn draw_arrow(&self, start: Pos2, end: Pos2, ctx: &DrawingContext, stroke: &PathStroke) {
         let x_diff = (end.x - start.x).max(100.);
         let scaled_x_diff = 0.4 * x_diff;
 
@@ -1354,10 +1576,10 @@ impl SystemState {
             points: [start, anchor1, anchor2, end],
             closed: false,
             fill: Default::default(),
-            stroke: path_stroke.clone(),
+            stroke: stroke.clone(),
         }));
 
-        self.draw_arrowheads(anchor2, end, ctx, head_stroke);
+        self.draw_arrowheads(anchor2, end, ctx, stroke);
     }
 
     /// Draws arrowheads for the vector going from `vec_start` to `vec_tip`.
@@ -1367,14 +1589,14 @@ impl SystemState {
         vec_start: Pos2,
         vec_tip: Pos2,
         ctx: &DrawingContext,
-        stroke: &Stroke,
+        stroke: &PathStroke,
     ) {
         let head_length = ctx.theme.relation_arrow.head_length;
 
         let vec_x = vec_tip.x - vec_start.x;
         let vec_y = vec_tip.y - vec_start.y;
 
-        let alpha = 2. * PI / 360. * ctx.theme.relation_arrow.head_angle;
+        let alpha = (2. * PI / 360.) * ctx.theme.relation_arrow.head_angle;
 
         // calculate the points of the new vector, which forms an angle of the given degrees with the given vector
         let vec_angled_x = vec_x * alpha.cos() + vec_y * alpha.sin();
@@ -1390,20 +1612,19 @@ impl SystemState {
         let arrowhead_right_x = vec_tip.x + vec_angled_y;
         let arrowhead_right_y = vec_tip.y - vec_angled_x;
 
-        ctx.painter.add(Shape::line_segment(
-            [vec_tip, Pos2::new(arrowhead_left_x, arrowhead_left_y)],
-            *stroke,
-        ));
-
-        ctx.painter.add(Shape::line_segment(
-            [vec_tip, Pos2::new(arrowhead_right_x, arrowhead_right_y)],
-            *stroke,
+        ctx.painter.add(PathShape::line(
+            vec![
+                Pos2::new(arrowhead_right_x, arrowhead_right_y),
+                vec_tip,
+                Pos2::new(arrowhead_left_x, arrowhead_left_y),
+            ],
+            stroke.clone(),
         ));
     }
 
     fn handle_canvas_context_menu(
         &self,
-        response: Response,
+        response: &Response,
         waves: &WaveData,
         to_screen: RectTransform,
         ctx: &mut DrawingContext,
@@ -1412,7 +1633,7 @@ impl SystemState {
     ) {
         let size = response.rect.size();
         response.context_menu(|ui| {
-            let offset = ui.spacing().menu_margin.left as f32;
+            let offset = f32::from(ui.spacing().menu_margin.left);
             let top_left = to_screen.inverse().transform_rect(ui.min_rect()).left_top()
                 - Pos2 {
                     x: offset,
@@ -1460,7 +1681,7 @@ impl SystemState {
     ) -> Option<BigInt> {
         let pos = pointer_pos_canvas?;
         let viewport = &waves.viewports[viewport_idx];
-        let num_timestamps = waves.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = waves.num_timestamps().unwrap_or_else(BigInt::one);
         let timestamp = viewport.as_time_bigint(pos.x, frame_width, &num_timestamps);
         if let Some(utimestamp) = timestamp.to_biguint()
             && let Some(vidx) = waves.get_item_at_y(pos.y)
@@ -1503,7 +1724,11 @@ impl SystemState {
         viewport: &Viewport,
         waves: &WaveData,
     ) {
-        let x = viewport.pixel_from_time(time, size.x, &waves.num_timestamps().unwrap_or(1.into()));
+        let x = viewport.pixel_from_time(
+            time,
+            size.x,
+            &waves.num_timestamps().unwrap_or_else(BigInt::one),
+        );
 
         ctx.painter.line_segment(
             [
@@ -1536,12 +1761,15 @@ impl VariableExt for String {
     ) -> (f32, Color32, Option<Color32>) {
         let color = value_kind.color(user_color, theme);
         let (height, background) = match (value_kind, self) {
-            (ValueKind::HighImp, _) => (0.5, None),
-            (ValueKind::Undef, _) => (0.5, None),
-            (ValueKind::DontCare, _) => (0.5, None),
-            (ValueKind::Warn, _) => (0.5, None),
-            (ValueKind::Error, _) => (0.5, None),
-            (ValueKind::Custom(_), _) => (0.5, None),
+            (
+                ValueKind::HighImp
+                | ValueKind::Undef
+                | ValueKind::DontCare
+                | ValueKind::Warn
+                | ValueKind::Error
+                | ValueKind::Custom(_),
+                _,
+            ) => (0.5, None),
             (ValueKind::Weak, other) => {
                 if other.to_lowercase() == "l" {
                     (0., None)
@@ -1556,6 +1784,7 @@ impl VariableExt for String {
                     (1., Some(color.gamma_multiply(theme.waveform_opacity)))
                 }
             }
+            (ValueKind::Event, _) => (1., Some(color.gamma_multiply(theme.waveform_opacity))),
         };
         (height, color, background)
     }

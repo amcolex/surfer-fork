@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use eyre::{Result, WrapErr};
 use num::bigint::ToBigInt as _;
-use num::{BigInt, BigUint, Zero};
+use num::{BigInt, BigUint, One, ToPrimitive, Zero};
 use serde::{Deserialize, Serialize};
 use surfer_translation_types::{TranslationPreference, Translator, VariableValue};
 use tracing::{error, info, warn};
@@ -20,7 +20,9 @@ use crate::translation::{DynTranslator, TranslatorList, VariableInfoExt};
 use crate::variable_name_type::VariableNameType;
 use crate::view::ItemDrawingInfo;
 use crate::viewport::Viewport;
-use crate::wave_container::{ScopeRef, VariableMeta, VariableRef, VariableRefExt, WaveContainer};
+use crate::wave_container::{
+    AnalogCacheKey, ScopeRef, VariableMeta, VariableRef, VariableRefExt, WaveContainer,
+};
 use crate::wave_source::{WaveFormat, WaveSource};
 use crate::wellen::LoadSignalsCmd;
 use ftr_parser::types::Transaction;
@@ -74,9 +76,16 @@ pub struct WaveData {
     pub top_item_draw_offset: f32,
     #[serde(skip)]
     pub total_height: f32,
-    /// used by the `update_viewports` method after loading a new file
     #[serde(skip)]
     pub old_num_timestamps: Option<BigInt>,
+    /// Generation counter for analog cache invalidation on waveform reload.
+    #[serde(skip)]
+    pub cache_generation: u64,
+    /// Registry of in-flight analog cache builds for sharing.
+    /// Cleared on waveform reload when generation changes.
+    #[serde(skip)]
+    pub inflight_caches:
+        HashMap<AnalogCacheKey, std::sync::Arc<crate::analog_signal_cache::AnalogCacheEntry>>,
 }
 
 fn select_preferred_translator(var: &VariableMeta, translators: &TranslatorList) -> String {
@@ -129,27 +138,25 @@ pub fn variable_translator<'a, F>(
 where
     F: FnOnce() -> Result<VariableMeta>,
 {
-    let translator_name = translator
-        .cloned()
-        .or_else(|| {
-            Some(if field.is_empty() {
-                meta()
-                    .as_ref()
-                    .map(|meta| select_preferred_translator(meta, translators).clone())
-                    .unwrap_or_else(|e| {
-                        warn!("{e:#?}");
-                        translators.default.clone()
-                    })
-            } else {
-                translators.default.clone()
-            })
-        })
-        .unwrap();
+    let translator_name = translator.cloned().unwrap_or_else(|| {
+        if field.is_empty() {
+            meta().as_ref().map_or_else(
+                |e| {
+                    warn!("{e:#?}");
+                    translators.default.clone()
+                },
+                |meta| select_preferred_translator(meta, translators).clone(),
+            )
+        } else {
+            translators.default.clone()
+        }
+    });
 
     (translators.get_translator(&translator_name)) as _
 }
 
 impl WaveData {
+    #[must_use]
     pub fn update_with_waves(
         mut self,
         new_waves: Box<WaveContainer>,
@@ -194,6 +201,8 @@ impl WaveData {
             graphics: HashMap::new(),
             total_height: 0.,
             old_num_timestamps,
+            cache_generation: self.cache_generation + 1, // Invalidate all existing caches
+            inflight_caches: HashMap::new(),
         };
 
         new_wavedata.update_metadata(translators);
@@ -229,7 +238,7 @@ impl WaveData {
     ///
     /// Used after loading new waves, signals or switching a bunch of translators
     fn update_metadata(&mut self, translators: &TranslatorList) {
-        for (_vidx, di) in self.displayed_items.iter_mut() {
+        for di in self.displayed_items.values_mut() {
             let DisplayedItem::Variable(displayed_variable) = di else {
                 continue;
             };
@@ -270,8 +279,8 @@ impl WaveData {
             .expect("internal error: failed to load variables")
     }
 
-    /// Needs to be called after update_with, once the new number of timestamps is available in
-    /// the inner WaveContainer.
+    /// Needs to be called after `update_with`, once the new number of timestamps is available in
+    /// the inner `WaveContainer`.
     pub fn update_viewports(&mut self) {
         if let Some(old_num_timestamps) = std::mem::take(&mut self.old_num_timestamps) {
             // FIXME: I'm not sure if Defaulting to 1 time step is the right thing to do if we
@@ -279,11 +288,11 @@ impl WaveData {
             let new_num_timestamps = self
                 .inner
                 .max_timestamp()
-                .unwrap_or_else(|| BigUint::from(1u32))
+                .unwrap_or_else(BigUint::one)
                 .to_bigint()
                 .unwrap();
             if new_num_timestamps != old_num_timestamps {
-                for viewport in self.viewports.iter_mut() {
+                for viewport in &mut self.viewports {
                     *viewport = viewport.clip_to(&old_num_timestamps, &new_num_timestamps);
                 }
             }
@@ -348,14 +357,16 @@ impl WaveData {
             .collect()
     }
 
+    #[must_use]
     pub fn select_preferred_translator(
         &self,
-        var: VariableMeta,
+        var: &VariableMeta,
         translators: &TranslatorList,
     ) -> String {
-        select_preferred_translator(&var, translators)
+        select_preferred_translator(var, translators)
     }
 
+    #[must_use]
     pub fn variable_translator<'a>(
         &'a self,
         field: &DisplayedFieldRef,
@@ -380,6 +391,27 @@ impl WaveData {
         )
     }
 
+    #[must_use]
+    pub fn variable_translator_with_meta<'a>(
+        &'a self,
+        field: &DisplayedFieldRef,
+        translators: &'a TranslatorList,
+        meta: &VariableMeta,
+    ) -> &'a DynTranslator {
+        let Some(DisplayedItem::Variable(displayed_variable)) =
+            self.displayed_items.get(&field.item)
+        else {
+            panic!("asking for translator for a non DisplayItem::Variable item")
+        };
+
+        variable_translator(
+            displayed_variable.get_format(&field.field),
+            &field.field,
+            translators,
+            || Ok(meta.clone()),
+        )
+    }
+
     pub fn add_variables(
         &mut self,
         translators: &TranslatorList,
@@ -387,6 +419,7 @@ impl WaveData {
         target_position: Option<TargetPosition>,
         update_display_names: bool,
         ignore_failures: bool,
+        variable_name_type: Option<VariableNameType>,
     ) -> (Option<LoadSignalsCmd>, Vec<DisplayedItemRef>) {
         let mut indices = vec![];
         // load variables from waveform
@@ -431,11 +464,12 @@ impl WaveData {
                 color: None,
                 background_color: None,
                 display_name: variable.name.clone(),
-                display_name_type: self.default_variable_name_type,
+                display_name_type: variable_name_type.unwrap_or(self.default_variable_name_type),
                 manual_name: None,
                 format: None,
                 field_formats: vec![],
                 height_scaling_factor: None,
+                analog: None,
             });
 
             indices.push(self.insert_item(new_variable, Some(target_position), true));
@@ -451,6 +485,7 @@ impl WaveData {
         (res, indices)
     }
 
+    /// Remove a single item, it's legal to call this function with an invalid ID
     pub fn remove_displayed_item(&mut self, id: DisplayedItemRef) {
         let Some(idx) = self
             .items_tree
@@ -495,7 +530,7 @@ impl WaveData {
                     .checked_sub(1)
                     .map(VisibleItemIndex),
             }
-        })
+        });
     }
 
     pub fn add_divider(&mut self, name: Option<String>, vidx: Option<VisibleItemIndex>) {
@@ -557,7 +592,7 @@ impl WaveData {
                 .inner
                 .load_stream_into_memory(gen_ref.stream_id)
             {
-                Ok(_) => info!("(Generator {gen_id}) Finished loading transactions!"),
+                Ok(()) => info!("(Generator {gen_id}) Finished loading transactions!"),
                 Err(_) => return,
             }
         }
@@ -598,7 +633,7 @@ impl WaveData {
                 .inner
                 .load_stream_into_memory(stream_ref.stream_id)
             {
-                Ok(_) => info!(
+                Ok(()) => info!(
                     "(Stream {}) Finished loading transactions!",
                     stream_ref.stream_id
                 ),
@@ -653,6 +688,7 @@ impl WaveData {
     /// - an unfolded group, insert index is to the first element of the group
     /// - a folded group, insert index is to before the next sibling (if exists)
     /// - otherwise insert index is past it on the same level
+    #[must_use]
     pub fn insert_position(&self, vidx: Option<VisibleItemIndex>) -> Option<TargetPosition> {
         let vidx = vidx?;
         let item_index = self.items_tree.to_displayed(vidx)?;
@@ -678,6 +714,7 @@ impl WaveData {
     }
 
     /// Return insert position as last item
+    #[must_use]
     pub fn end_insert_position(&self) -> TargetPosition {
         TargetPosition {
             before: ItemIndex(self.items_tree.len()),
@@ -685,6 +722,7 @@ impl WaveData {
         }
     }
 
+    #[must_use]
     pub fn index_for_ref_or_focus(&self, item_ref: Option<DisplayedItemRef>) -> Option<ItemIndex> {
         if let Some(item_ref) = item_ref {
             self.items_tree
@@ -733,7 +771,7 @@ impl WaveData {
 
     pub fn go_to_cursor_if_not_in_view(&mut self) -> bool {
         if let Some(cursor) = &self.cursor {
-            let num_timestamps = self.num_timestamps().unwrap_or(1.into());
+            let num_timestamps = self.num_timestamps().unwrap_or_else(BigInt::one);
             self.viewports[0].go_to_cursor_if_not_in_view(cursor, &num_timestamps)
         } else {
             false
@@ -745,15 +783,17 @@ impl WaveData {
         viewport.pixel_from_time(
             self.numbered_marker_time(idx),
             view_width,
-            &self.num_timestamps().unwrap_or(1.into()),
+            &self.num_timestamps().unwrap_or_else(BigInt::one),
         )
     }
 
     #[inline]
+    #[must_use]
     pub fn numbered_marker_time(&self, idx: u8) -> &BigInt {
         self.markers.get(&idx).unwrap()
     }
 
+    #[must_use]
     pub fn viewport_all(&self) -> Viewport {
         Viewport::new()
     }
@@ -771,11 +811,13 @@ impl WaveData {
     }
 
     #[inline]
+    #[must_use]
     pub fn any_displayed(&self) -> bool {
         !self.displayed_items.is_empty()
     }
 
     /// Find the top-most of the currently visible items.
+    #[must_use]
     pub fn get_top_item(&self) -> usize {
         let default = if self.drawing_infos.is_empty() {
             0
@@ -790,6 +832,7 @@ impl WaveData {
     }
 
     /// Find the item at a given y-location.
+    #[must_use]
     pub fn get_item_at_y(&self, y: f32) -> Option<VisibleItemIndex> {
         if self.drawing_infos.is_empty() {
             return None;
@@ -892,8 +935,8 @@ impl WaveData {
                     if next_value.is_ok_and(|r| {
                         r.is_some_and(|r| {
                             r.current.is_some_and(|v| match v.1 {
-                                VariableValue::BigUint(v) => v == BigUint::from(0u8),
-                                _ => false,
+                                VariableValue::BigUint(v) => v.is_zero(),
+                                VariableValue::String(_) => false,
                             })
                         })
                     }) {
@@ -912,13 +955,15 @@ impl WaveData {
     /// Returns the number of timestamps in the current waves. For now, this adjusts the
     /// number of timestamps as returned by wave sources if they specify 0 timestamps. This is
     /// done to avoid having to consider what happens with the viewport.
+    #[must_use]
     pub fn num_timestamps(&self) -> Option<BigInt> {
         self.inner
             .max_timestamp()
-            .and_then(|r| if r == BigUint::zero() { None } else { Some(r) })
+            .and_then(|r| if r.is_zero() { None } else { Some(r) })
             .and_then(|r| r.to_bigint())
     }
 
+    #[must_use]
     pub fn get_displayed_item_index(
         &self,
         item_ref: &DisplayedItemRef,
@@ -934,5 +979,52 @@ impl WaveData {
                     None
                 }
             })
+    }
+
+    /// Spawn async worker to build analog cache. Worker holds Arc clone.
+    pub fn build_analog_cache_async(
+        &self,
+        entry: std::sync::Arc<crate::analog_signal_cache::AnalogCacheEntry>,
+        variable_ref: &VariableRef,
+        translator: crate::translation::AnyTranslator,
+        sender: &std::sync::mpsc::Sender<crate::message::Message>,
+    ) -> Option<()> {
+        let wave_container = self.inner.as_waves()?;
+        let meta = wave_container.variable_meta(variable_ref).ok()?.clone();
+
+        let num_timestamps = self.num_timestamps()?.to_u64()?;
+
+        let accessor = wave_container.signal_accessor(entry.cache_key.0).ok()?;
+
+        let sender_clone = sender.clone();
+        crate::async_util::perform_work(move || {
+            let result = crate::analog_signal_cache::AnalogSignalCache::build(
+                accessor,
+                &translator,
+                &meta,
+                num_timestamps,
+                None,
+            );
+
+            let msg = match result {
+                Some(cache) => crate::message::Message::AnalogCacheBuilt {
+                    entry: entry.clone(),
+                    result: Ok(cache),
+                },
+                None => crate::message::Message::AnalogCacheBuilt {
+                    entry: entry.clone(),
+                    result: Err("Failed to build analog cache".into()),
+                },
+            };
+
+            crate::OUTSTANDING_TRANSACTIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = sender_clone.send(msg);
+
+            if let Some(ctx) = crate::EGUI_CONTEXT.read().unwrap().as_ref() {
+                ctx.request_repaint();
+            }
+        });
+
+        Some(())
     }
 }

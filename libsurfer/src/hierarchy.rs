@@ -25,7 +25,6 @@ use itertools::Itertools;
 use num::BigUint;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
-use surfer_translation_types::VariableType;
 use tracing::warn;
 #[derive(Clone, Copy, Debug, Deserialize, Display, FromStr, PartialEq, Eq, Serialize, Sequence)]
 pub enum HierarchyStyle {
@@ -55,7 +54,8 @@ impl SystemState {
             .max_height(total_space - 64.0)
             .frame(Frame::new().inner_margin(Margin::same(5)))
             .show_inside(ui, |ui| {
-                ui.heading("Scopes");
+                ui.heading("Scopes")
+                    .context_menu(|ui| self.hierarchy_menu(msgs, ui));
                 ui.add_space(3.0);
 
                 ScrollArea::both()
@@ -72,7 +72,8 @@ impl SystemState {
             .frame(Frame::new().inner_margin(Margin::same(5)))
             .show_inside(ui, |ui| {
                 ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-                    ui.heading("Variables");
+                    ui.heading("Variables")
+                        .context_menu(|ui| self.hierarchy_menu(msgs, ui));
                     ui.add_space(3.0);
                     self.draw_variable_filter_edit(ui, msgs, false);
                 });
@@ -92,9 +93,8 @@ impl SystemState {
             let active_scope = waves.active_scope.as_ref().unwrap_or(&empty_scope);
             match active_scope {
                 ScopeType::WaveScope(scope) => {
-                    let wave_container = match waves.inner.as_waves() {
-                        Some(wc) => wc,
-                        None => return,
+                    let Some(wave_container) = waves.inner.as_waves() else {
+                        return;
                     };
                     let variables =
                         self.filtered_variables(&wave_container.variables_in_scope(scope), false);
@@ -103,40 +103,19 @@ impl SystemState {
                         let parameters = wave_container.parameters_in_scope(scope);
                         if !parameters.is_empty() {
                             ScrollArea::both()
-                            .auto_shrink([false; 2])
-                            .id_salt("variables")
-                            .show(ui, |ui| {
-                                egui::collapsing_header::CollapsingState::load_with_default_open(
-                                    ui.ctx(),
-                                    egui::Id::new(&parameters),
-                                    self.expand_parameter_section,
-                                )
-                                .show_header(ui, |ui| {
-                                    ui.with_layout(
-                                        Layout::top_down(Align::LEFT).with_cross_justify(true),
-                                        |ui| {
-                                            ui.label("Parameters");
-                                        },
-                                    );
-                                })
-                                .body(|ui| {
-                                    self.filter_and_draw_variable_list(
+                                .auto_shrink([false; 2])
+                                .id_salt("variables")
+                                .show(ui, |ui| {
+                                    self.draw_parameters(msgs, wave_container, &parameters, ui);
+                                    self.draw_variable_list(
                                         msgs,
                                         wave_container,
                                         ui,
-                                        &parameters,
+                                        &variables,
                                         None,
+                                        false,
                                     );
                                 });
-                                self.draw_variable_list(
-                                    msgs,
-                                    wave_container,
-                                    ui,
-                                    &variables,
-                                    None,
-                                    false,
-                                );
-                            });
                             return; // Early exit
                         }
                     }
@@ -153,7 +132,7 @@ impl SystemState {
                                 wave_container,
                                 ui,
                                 &variables,
-                                Some(row_range),
+                                Some(&row_range),
                                 false,
                             );
                         });
@@ -170,6 +149,31 @@ impl SystemState {
         }
     }
 
+    fn draw_parameters(
+        &self,
+        msgs: &mut Vec<Message>,
+        wave_container: &WaveContainer,
+        parameters: &[VariableRef],
+        ui: &mut Ui,
+    ) {
+        egui::collapsing_header::CollapsingState::load_with_default_open(
+            ui.ctx(),
+            egui::Id::new(parameters),
+            self.expand_parameter_section,
+        )
+        .show_header(ui, |ui| {
+            ui.with_layout(
+                Layout::top_down(Align::LEFT).with_cross_justify(true),
+                |ui| {
+                    ui.label("Parameters");
+                },
+            );
+        })
+        .body(|ui| {
+            self.filter_and_draw_variable_list(msgs, wave_container, ui, parameters, None);
+        });
+    }
+
     /// Scopes and variables in a joint tree.
     pub fn tree(&mut self, ui: &mut Ui, msgs: &mut Vec<Message>) {
         ui.visuals_mut().override_text_color =
@@ -180,7 +184,8 @@ impl SystemState {
             |ui| {
                 Frame::new().inner_margin(Margin::same(5)).show(ui, |ui| {
                     ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-                        ui.heading("Hierarchy");
+                        ui.heading("Hierarchy")
+                            .context_menu(|ui| self.hierarchy_menu(msgs, ui));
                         ui.add_space(3.0);
                         self.draw_variable_filter_edit(ui, msgs, false);
                     });
@@ -207,7 +212,8 @@ impl SystemState {
             |ui| {
                 Frame::new().inner_margin(Margin::same(5)).show(ui, |ui| {
                     ui.with_layout(Layout::left_to_right(Align::TOP), |ui| {
-                        ui.heading("Variables");
+                        ui.heading("Variables")
+                            .context_menu(|ui| self.hierarchy_menu(msgs, ui));
                         ui.add_space(3.0);
                         self.draw_variable_filter_edit(ui, msgs, true);
                     });
@@ -226,7 +232,7 @@ impl SystemState {
         if let Some(waves) = &self.user.waves {
             match &waves.inner {
                 DataContainer::Waves(wave_container) => {
-                    let variables = self.filtered_variables(&wave_container.variables(false), true);
+                    let variables = self.filtered_variables(&wave_container.variables(), true);
                     let row_height = ui
                         .text_style_height(&TextStyle::Monospace)
                         .max(ui.text_style_height(&TextStyle::Body));
@@ -239,7 +245,7 @@ impl SystemState {
                                 wave_container,
                                 ui,
                                 &variables,
-                                Some(row_range),
+                                Some(&row_range),
                                 true,
                             );
                         });
@@ -306,7 +312,7 @@ impl SystemState {
         response.drag_started().then(|| {
             msgs.push(Message::VariableDragStarted(VisibleItemIndex(
                 wave.display_item_ref_counter,
-            )))
+            )));
         });
 
         if scroll_to_label {
@@ -324,7 +330,7 @@ impl SystemState {
                     .iter()
                     .filter_map(|var| match var {
                         VarType::Variable(var) => Some(var.clone()),
-                        _ => None,
+                        VarType::Generator(_) => None,
                     })
                     .collect_vec();
 
@@ -371,9 +377,8 @@ impl SystemState {
         ui: &mut Ui,
     ) {
         // Extract wave container once to avoid repeated as_waves().unwrap() calls
-        let wave_container = match wave.inner.as_waves() {
-            Some(wc) => wc,
-            None => return,
+        let Some(wave_container) = wave.inner.as_waves() else {
+            return;
         };
 
         let Some(child_scopes) = wave_container
@@ -389,8 +394,14 @@ impl SystemState {
         if child_scopes.is_empty() && no_variables_in_scope && !self.show_empty_scopes() {
             return;
         }
+
         if child_scopes.is_empty() && (!draw_variables || no_variables_in_scope) {
-            self.add_scope_selectable_label(msgs, wave, scope, ui, false);
+            // Indent our label by both icon width and icon spacing to
+            // match the other headers that actually have an icon.
+            ui.horizontal(|ui| {
+                ui.add_space(ui.spacing().icon_width + ui.spacing().icon_spacing);
+                self.add_scope_selectable_label(msgs, wave, scope, ui, false);
+            });
         } else {
             let should_open_header = self.should_open_header(scope);
             let mut collapsing_header =
@@ -418,33 +429,16 @@ impl SystemState {
                     );
                 })
                 .body(|ui| {
-                    if draw_variables
+                    if (draw_variables
+                        && !(matches!(
+                            self.parameter_display_location(),
+                            ParameterDisplayLocation::Tooltips | ParameterDisplayLocation::None
+                        )))
                         || self.parameter_display_location() == ParameterDisplayLocation::Scopes
                     {
                         let parameters = wave_container.parameters_in_scope(scope);
                         if !parameters.is_empty() {
-                            egui::collapsing_header::CollapsingState::load_with_default_open(
-                                ui.ctx(),
-                                egui::Id::new(&parameters),
-                                false,
-                            )
-                            .show_header(ui, |ui| {
-                                ui.with_layout(
-                                    Layout::top_down(Align::LEFT).with_cross_justify(true),
-                                    |ui| {
-                                        ui.label("Parameters");
-                                    },
-                                );
-                            })
-                            .body(|ui| {
-                                self.filter_and_draw_variable_list(
-                                    msgs,
-                                    wave_container,
-                                    ui,
-                                    &parameters,
-                                    None,
-                                );
-                            });
+                            self.draw_parameters(msgs, wave_container, &parameters, ui);
                         }
                     }
                     self.draw_root_scope_view(msgs, wave, scope, draw_variables, ui);
@@ -471,9 +465,8 @@ impl SystemState {
         ui: &mut Ui,
     ) {
         // Extract wave container once to avoid unwrap
-        let wave_container = match wave.inner.as_waves() {
-            Some(wc) => wc,
-            None => return,
+        let Some(wave_container) = wave.inner.as_waves() else {
+            return;
         };
 
         let Some(child_scopes) = wave_container
@@ -501,7 +494,7 @@ impl SystemState {
         wave_container: &WaveContainer,
         ui: &mut Ui,
         variables: &[VariableRef],
-        row_range: Option<Range<usize>>,
+        row_range: Option<&Range<usize>>,
     ) {
         let filtered_variables = self.filtered_variables(variables, false);
         self.draw_variable_list(
@@ -520,7 +513,7 @@ impl SystemState {
         wave_container: &WaveContainer,
         ui: &mut Ui,
         variables: &[VariableRef],
-        row_range: Option<Range<usize>>,
+        row_range: Option<&Range<usize>>,
         display_full_path: bool,
     ) {
         // Get iterator with more info about each variable
@@ -528,7 +521,7 @@ impl SystemState {
             .iter()
             .map(|var| {
                 let meta = wave_container.variable_meta(var).ok();
-                let name_info = self.get_variable_name_info(wave_container, var);
+                let name_info = self.get_variable_name_info(var, meta.as_ref());
                 (var, meta, name_info)
             })
             .sorted_by_key(|(_, _, name_info)| {
@@ -537,12 +530,11 @@ impl SystemState {
                     .and_then(|info| info.priority)
                     .unwrap_or_default()
             })
-            .skip(row_range.as_ref().map(|r| r.start).unwrap_or(0))
+            .skip(row_range.as_ref().map_or(0, |r| r.start))
             .take(
                 row_range
                     .as_ref()
-                    .map(|r| r.end - r.start)
-                    .unwrap_or(variables.len()),
+                    .map_or(variables.len(), |r| r.end - r.start),
             );
 
         // Precompute common font metrics once per frame to avoid expensive per-row work.
@@ -566,6 +558,8 @@ impl SystemState {
                 .size()
                 .x
         });
+        // The button padding is added by egui on selectable labels
+        let available_space = ui.available_width() - ui.spacing().button_padding.x * 2.;
 
         // Draw variables
         for (variable, meta, name_info) in variable_infos {
@@ -585,13 +579,13 @@ impl SystemState {
             // Get direction icon
             let direction = self
                 .show_variable_direction()
-                .then(|| get_direction_string(&meta, &name_info))
+                .then(|| get_direction_string(meta.as_ref(), name_info.as_ref()))
                 .flatten()
                 .unwrap_or_default();
             // Get value in case of parameter
             let value = if meta
                 .as_ref()
-                .is_some_and(|meta| meta.variable_type == Some(VariableType::VCDParameter))
+                .is_some_and(surfer_translation_types::VariableMeta::is_parameter)
             {
                 let res = wave_container.query_variable(variable, &BigUint::ZERO).ok();
                 res.and_then(|o| o.and_then(|q| q.current.map(|v| format!(": {}", v.1))))
@@ -605,54 +599,48 @@ impl SystemState {
                 |ui| {
                     let mut label = LayoutJob::default();
 
-                    match name_info.and_then(|info| info.true_name) {
-                        Some(name) => {
-                            let direction_size = direction.chars().count();
-                            let index_size = index.chars().count();
-                            let value_size = value.chars().count();
-                            let used_space =
-                                (direction_size + index_size + value_size) as f32 * char_width_mono;
-                            // The button padding is added by egui on selectable labels
-                            let available_space =
-                                ui.available_width() - ui.spacing().button_padding.x * 2.;
-                            let space_for_name = available_space - used_space;
+                    if let Some(name) = name_info.and_then(|info| info.true_name) {
+                        let direction_size = direction.chars().count();
+                        let index_size = index.chars().count();
+                        let value_size = value.chars().count();
+                        let used_space =
+                            (direction_size + index_size + value_size) as f32 * char_width_mono;
+                        let space_for_name = available_space - used_space;
 
-                            let text_format = TextFormat {
-                                font_id: monospace_font.clone(),
-                                color: self.user.config.theme.foreground,
-                                ..Default::default()
-                            };
+                        let text_format = TextFormat {
+                            font_id: monospace_font.clone(),
+                            color: self.user.config.theme.foreground,
+                            ..Default::default()
+                        };
 
-                            label.append(&direction, 0.0, text_format.clone());
+                        label.append(&direction, 0.0, text_format.clone());
 
-                            draw_true_name(
-                                &name,
-                                &mut label,
-                                monospace_font.clone(),
-                                self.user.config.theme.foreground,
-                                char_width_mono,
-                                space_for_name,
-                            );
+                        draw_true_name(
+                            &name,
+                            &mut label,
+                            monospace_font.clone(),
+                            self.user.config.theme.foreground,
+                            char_width_mono,
+                            space_for_name,
+                        );
 
-                            label.append(&index, 0.0, text_format.clone());
-                            label.append(&value, 0.0, text_format.clone());
-                        }
-                        None => {
-                            let text_format = TextFormat {
-                                font_id: body_font.clone(),
-                                color: self.user.config.theme.foreground,
-                                ..Default::default()
-                            };
-                            let name = if display_full_path {
-                                variable.full_path().join(".")
-                            } else {
-                                variable.name.clone()
-                            };
-                            label.append(&direction, 0.0, text_format.clone());
-                            label.append(&name, 0.0, text_format.clone());
-                            label.append(&index, 0.0, text_format.clone());
-                            label.append(&value, 0.0, text_format.clone());
-                        }
+                        label.append(&index, 0.0, text_format.clone());
+                        label.append(&value, 0.0, text_format.clone());
+                    } else {
+                        let text_format = TextFormat {
+                            font_id: body_font.clone(),
+                            color: self.user.config.theme.foreground,
+                            ..Default::default()
+                        };
+                        let name = if display_full_path {
+                            variable.full_path().join(".")
+                        } else {
+                            variable.name.clone()
+                        };
+                        label.append(&direction, 0.0, text_format.clone());
+                        label.append(&name, 0.0, text_format.clone());
+                        label.append(&index, 0.0, text_format.clone());
+                        label.append(&value, 0.0, text_format.clone());
                     }
 
                     let mut response = ui.add(egui::Button::selectable(false, label));
@@ -667,7 +655,7 @@ impl SystemState {
                         response = response.on_hover_ui(move |ui| {
                             ui.set_max_width(ui.spacing().tooltip_width);
                             ui.add(egui::Label::new(variable_tooltip_text(
-                                &tooltip_meta,
+                                tooltip_meta.as_ref(),
                                 &tooltip_var,
                             )));
                         });
@@ -675,7 +663,7 @@ impl SystemState {
                     response.drag_started().then(|| {
                         msgs.push(Message::VariableDragStarted(VisibleItemIndex(
                             self.user.waves.as_ref().unwrap().display_item_ref_counter,
-                        )))
+                        )));
                     });
                     response.drag_stopped().then(|| {
                         if ui.input(|i| i.pointer.hover_pos().unwrap_or_default().x)

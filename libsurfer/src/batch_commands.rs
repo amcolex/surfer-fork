@@ -5,20 +5,24 @@ use tracing::{error, info, trace};
 
 use crate::{
     SystemState,
+    async_util::perform_async_work,
     command_parser::get_parser,
     fzcmd::parse_command,
     message::Message,
-    spawn,
     wave_source::{LoadProgress, LoadProgressStatus},
 };
 
 impl SystemState {
     /// After user messages are addressed, we try to execute batch commands as they are ready to run
     pub(crate) fn handle_batch_commands(&mut self) {
+        let mut should_exit = false;
         // we only execute commands while we aren't waiting for background operations to complete
         while self.can_start_batch_command() {
             if let Some(cmd) = self.batch_messages.pop_front() {
-                info!("Applying startup command: {cmd:?}");
+                if matches!(cmd, Message::Exit) {
+                    should_exit = true;
+                }
+                info!("Applying batch command: {cmd:?}");
                 self.update(cmd);
             } else {
                 break; // no more messages
@@ -31,6 +35,14 @@ impl SystemState {
             && self.can_start_batch_command()
         {
             self.batch_messages_completed = true;
+
+            if should_exit {
+                info!("Exiting due to batch command");
+                let sender = self.channels.msg_sender.clone();
+                if let Err(e) = sender.send(Message::Exit) {
+                    error!("Failed to send exit message: {e}");
+                }
+            }
         }
     }
 
@@ -91,7 +103,7 @@ impl SystemState {
             .filter(|(_no, line)| !line.is_empty())
             .flat_map(|(no, line)| {
                 line.split(';')
-                    .map(|cmd| (no, cmd.to_string()))
+                    .map(|cmd| (no, cmd.trim().to_string()))
                     .collect::<Vec<_>>()
             })
             .filter_map(|(no, command)| {
@@ -132,7 +144,7 @@ impl SystemState {
     pub fn load_commands_from_url(&mut self, url: String) {
         let sender = self.channels.msg_sender.clone();
         let url_ = url.clone();
-        let task = async move {
+        perform_async_work(async move {
             let maybe_response = reqwest::get(&url)
                 .map(|e| e.with_context(|| format!("Failed fetch download {url}")))
                 .await;
@@ -159,35 +171,26 @@ impl SystemState {
             if let Err(e) = sender.send(msg) {
                 error!("Failed to send message: {e}");
             }
-        };
-        spawn!(task);
+        });
 
         self.progress_tracker = Some(LoadProgress::new(LoadProgressStatus::Downloading(url_)));
     }
 }
 
+#[must_use]
 pub fn read_command_file(cmd_file: &Utf8PathBuf) -> Vec<String> {
     std::fs::read_to_string(cmd_file)
         .map_err(|e| error!("Failed to read commands from {cmd_file}. {e:#?}"))
         .ok()
-        .map(|file_content| {
-            file_content
-                .lines()
-                .map(std::string::ToString::to_string)
-                .collect()
-        })
+        .map(|file_content| file_content.lines().map(str::to_string).collect())
         .unwrap_or_default()
 }
 
+#[must_use]
 pub fn read_command_bytes(bytes: Vec<u8>) -> Vec<String> {
     String::from_utf8(bytes)
         .map_err(|e| error!("Failed to read commands from file. {e:#?}"))
         .ok()
-        .map(|file_content| {
-            file_content
-                .lines()
-                .map(std::string::ToString::to_string)
-                .collect()
-        })
+        .map(|file_content| file_content.lines().map(str::to_string).collect())
         .unwrap_or_default()
 }

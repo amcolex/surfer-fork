@@ -4,11 +4,11 @@ use std::io::Cursor;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicU64;
-use std::sync::mpsc::Sender;
 
-use crate::async_util::{perform_async_work, perform_work, sleep_ms};
+use crate::async_util::{perform_async_work, perform_work};
 use crate::cxxrtl_container::CxxrtlContainer;
-use crate::spawn;
+use crate::file_dialog::OpenMode;
+use crate::remote::{get_hierarchy_from_server, get_server_status, server_reload};
 use crate::util::get_multi_extension;
 use camino::{Utf8Path, Utf8PathBuf};
 use eyre::Report;
@@ -26,7 +26,9 @@ use crate::wellen::{
     BodyResult, HeaderResult, LoadSignalPayload, LoadSignalsCmd, LoadSignalsResult,
 };
 use crate::{SystemState, message::Message};
-use surver::{HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, Status, WELLEN_SURFER_DEFAULT_OPTIONS};
+use surver::{
+    HTTP_SERVER_KEY, HTTP_SERVER_VALUE_SURFER, SurverFileInfo, WELLEN_SURFER_DEFAULT_OPTIONS,
+};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 pub enum CxxrtlKind {
@@ -54,6 +56,7 @@ pub enum WaveSource {
 pub const STATE_FILE_EXTENSION: &str = "surf.ron";
 
 impl WaveSource {
+    #[must_use]
     pub fn as_file(&self) -> Option<&Utf8Path> {
         match self {
             WaveSource::File(path) => Some(path.as_path()),
@@ -61,6 +64,7 @@ impl WaveSource {
         }
     }
 
+    #[must_use]
     pub fn path(&self) -> Option<&Utf8PathBuf> {
         match self {
             WaveSource::File(path) => Some(path),
@@ -69,6 +73,7 @@ impl WaveSource {
         }
     }
 
+    #[must_use]
     pub fn sibling_state_file(&self) -> Option<Utf8PathBuf> {
         let path = self.path()?;
         let directory = path.parent()?;
@@ -89,12 +94,15 @@ impl WaveSource {
         None
     }
 
+    #[must_use]
     pub fn into_translation_type(&self) -> surfer_translation_types::WaveSource {
         use surfer_translation_types::WaveSource as Ws;
         match self {
             WaveSource::File(file) => Ws::File(file.to_string()),
             WaveSource::Data => Ws::Data,
-            WaveSource::DragAndDrop(file) => Ws::DragAndDrop(file.as_ref().map(|f| f.to_string())),
+            WaveSource::DragAndDrop(file) => {
+                Ws::DragAndDrop(file.as_ref().map(ToString::to_string))
+            }
             WaveSource::Url(u) => Ws::Url(u.clone()),
             WaveSource::Cxxrtl(_) => Ws::Cxxrtl,
         }
@@ -167,17 +175,19 @@ impl Display for WaveFormat {
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct LoadOptions {
-    pub keep_variables: bool,
-    pub keep_unavailable: bool,
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy)]
+pub enum LoadOptions {
+    Clear,
+    KeepAvailable,
+    KeepAll,
 }
 
-impl LoadOptions {
-    pub fn clean() -> Self {
-        Self {
-            keep_variables: false,
-            keep_unavailable: false,
+impl From<(OpenMode, bool)> for LoadOptions {
+    fn from(val: (OpenMode, bool)) -> Self {
+        match val {
+            (OpenMode::Open, _) => LoadOptions::Clear,
+            (OpenMode::Switch, false) => LoadOptions::KeepAvailable,
+            (OpenMode::Switch, true) => LoadOptions::KeepAll,
         }
     }
 }
@@ -188,6 +198,7 @@ pub struct LoadProgress {
 }
 
 impl LoadProgress {
+    #[must_use]
     pub fn new(progress: LoadProgressStatus) -> Self {
         LoadProgress {
             started: Instant::now(),
@@ -314,20 +325,20 @@ impl SystemState {
                         self.load_from_bytes(
                             WaveSource::DragAndDrop(Some(path)),
                             bytes.to_vec(),
-                            LoadOptions::clean(),
+                            LoadOptions::Clear,
                         );
                     }
                 } else {
                     self.load_from_bytes(
                         WaveSource::DragAndDrop(path),
                         bytes.to_vec(),
-                        LoadOptions::clean(),
+                        LoadOptions::Clear,
                     );
                 }
                 Ok(())
             }
         } else if let Some(path) = path {
-            self.load_from_file(path, LoadOptions::clean())
+            self.load_from_file(path, LoadOptions::Clear)
         } else {
             Err(anyhow!(
                 "Unknown how to load dropped file w/o path or bytes"
@@ -335,20 +346,27 @@ impl SystemState {
         }
     }
 
-    pub fn load_wave_from_url(&mut self, url: String, load_options: LoadOptions) {
+    pub fn load_wave_from_url(
+        &mut self,
+        url: String,
+        load_options: LoadOptions,
+        force_switch: bool,
+    ) {
         match url_to_wavesource(&url) {
             // We want to support opening cxxrtl urls using open url and friends,
             // so we'll special case
             #[cfg(not(target_arch = "wasm32"))]
             Some(WaveSource::Cxxrtl(kind)) => {
-                self.connect_to_cxxrtl(kind, load_options.keep_variables);
+                self.connect_to_cxxrtl(kind, load_options != LoadOptions::Clear);
             }
             // However, if we don't get a cxxrtl url, we want to continue loading this as
             // a url even if it isn't auto detected as a url.
             _ => {
                 let sender = self.channels.msg_sender.clone();
                 let url_ = url.clone();
-                let task = async move {
+                let file_index = self.user.selected_server_file_index;
+                info!("Loading wave from url: {url}");
+                perform_async_work(async move {
                     let maybe_response = reqwest::get(&url)
                         .map(|e| e.with_context(|| format!("Failed fetch download {url}")))
                         .await;
@@ -366,10 +384,50 @@ impl SystemState {
                     if let Some(value) = response.headers().get(HTTP_SERVER_KEY)
                         && matches!(value.to_str(), Ok(HTTP_SERVER_VALUE_SURFER))
                     {
-                        info!("Connecting to a surfer server at: {url}");
-                        // request status and hierarchy
-                        Self::get_server_status(sender.clone(), url.clone(), 0);
-                        Self::get_hierarchy_from_server(sender.clone(), url.clone(), load_options);
+                        match load_options {
+                            LoadOptions::Clear => {
+                                info!("Connecting to a surfer server at: {url}");
+                                // Request status
+                                get_server_status(sender.clone(), url.clone(), 0);
+                                // Request hierarchy
+                                if let Some(file_index) = file_index {
+                                    get_hierarchy_from_server(
+                                        sender.clone(),
+                                        url,
+                                        load_options,
+                                        file_index,
+                                    );
+                                }
+                            }
+                            LoadOptions::KeepAvailable | LoadOptions::KeepAll => {
+                                // Request a reload (will also get status and request hierarchy if needed)
+                                if let Some(file_index) = file_index {
+                                    if force_switch {
+                                        get_hierarchy_from_server(
+                                            sender.clone(),
+                                            url,
+                                            load_options,
+                                            file_index,
+                                        );
+                                    } else {
+                                        info!("Reloading from surver instance at: {url}");
+                                        server_reload(
+                                            sender.clone(),
+                                            url,
+                                            load_options,
+                                            file_index,
+                                        );
+                                    }
+                                } else if force_switch {
+                                    // We started Surfer with a Surver URL as argument, so request status
+                                    get_server_status(sender.clone(), url.clone(), 0);
+                                } else {
+                                    warn!(
+                                        "Cannot reload from surver instance without a selected file index"
+                                    );
+                                }
+                            }
+                        }
                         return;
                     }
 
@@ -386,8 +444,7 @@ impl SystemState {
                     if let Err(e) = sender.send(msg) {
                         error!("Failed to send message: {e}");
                     }
-                };
-                spawn!(task);
+                });
 
                 self.progress_tracker =
                     Some(LoadProgress::new(LoadProgressStatus::Downloading(url_)));
@@ -448,83 +505,9 @@ impl SystemState {
             error!("Failed to send message: {e}");
         }
     }
-    fn get_hierarchy_from_server(
-        sender: Sender<Message>,
-        server: String,
-        load_options: LoadOptions,
-    ) {
-        let start = web_time::Instant::now();
-        let source = WaveSource::Url(server.clone());
-
-        let task = async move {
-            let res = crate::remote::get_hierarchy(server.clone())
-                .await
-                .map_err(|e| anyhow!("{e:?}"))
-                .with_context(|| {
-                    format!("Failed to retrieve hierarchy from remote server {server}")
-                });
-
-            let msg = match res {
-                Ok(h) => {
-                    let header = HeaderResult::Remote(Arc::new(h.hierarchy), h.file_format, server);
-                    Message::WaveHeaderLoaded(start, source, load_options, header)
-                }
-                Err(e) => Message::Error(e),
-            };
-            if let Err(e) = sender.send(msg) {
-                error!("Failed to send message: {e}");
-            }
-        };
-        spawn!(task);
-    }
-
-    pub fn get_time_table_from_server(sender: Sender<Message>, server: String) {
-        let start = web_time::Instant::now();
-        let source = WaveSource::Url(server.clone());
-
-        let task = async move {
-            let res = crate::remote::get_time_table(server.clone())
-                .await
-                .map_err(|e| anyhow!("{e:?}"))
-                .with_context(|| {
-                    format!("Failed to retrieve time table from remote server {server}")
-                });
-
-            let msg = match res {
-                Ok(table) => {
-                    Message::WaveBodyLoaded(start, source, BodyResult::Remote(table, server))
-                }
-                Err(e) => Message::Error(e),
-            };
-            if let Err(e) = sender.send(msg) {
-                error!("Failed to send message: {e}");
-            }
-        };
-        spawn!(task);
-    }
-
-    fn get_server_status(sender: Sender<Message>, server: String, delay_ms: u64) {
-        let start = web_time::Instant::now();
-        let task = async move {
-            sleep_ms(delay_ms).await;
-            let res = crate::remote::get_status(server.clone())
-                .await
-                .map_err(|e| anyhow!("{e:?}"))
-                .with_context(|| format!("Failed to retrieve status from remote server {server}"));
-
-            let msg = match res {
-                Ok(status) => Message::SurferServerStatus(start, server, status),
-                Err(e) => Message::Error(e),
-            };
-            if let Err(e) = sender.send(msg) {
-                error!("Failed to send message: {e}");
-            }
-        };
-        spawn!(task);
-    }
 
     /// uses the server status in order to display a loading bar
-    pub fn server_status_to_progress(&mut self, server: String, status: Status) {
+    pub fn server_status_to_progress(&mut self, server: &str, file_info: &SurverFileInfo) {
         // once the body is loaded, we are no longer interested in the status
         let body_loaded = self
             .user
@@ -533,15 +516,15 @@ impl SystemState {
             .is_some_and(|w| w.inner.body_loaded());
         if !body_loaded {
             // the progress tracker will be cleared once the hierarchy is returned from the server
-            let source = WaveSource::Url(server.clone());
+            let source = WaveSource::Url(server.to_string());
             let sender = self.channels.msg_sender.clone();
             self.progress_tracker = Some(LoadProgress::new(LoadProgressStatus::ReadingBody(
                 source,
-                status.bytes,
-                Arc::new(AtomicU64::new(status.bytes_loaded)),
+                file_info.bytes,
+                Arc::new(AtomicU64::new(file_info.bytes_loaded)),
             )));
             // get another status update
-            Self::get_server_status(sender, server, 250);
+            get_server_status(sender, server.to_string(), 250);
         }
     }
 
@@ -572,15 +555,17 @@ impl SystemState {
                 CxxrtlKind::Mailbox => CxxrtlContainer::new_wasm_mailbox(sender.clone()).await,
             };
 
+            let load_options = if keep_variables {
+                LoadOptions::KeepAvailable
+            } else {
+                LoadOptions::Clear
+            };
             let msg = match container {
                 Ok(c) => Message::WavesLoaded(
                     WaveSource::Cxxrtl(kind),
                     WaveFormat::CxxRtl,
                     Box::new(WaveContainer::Cxxrtl(Box::new(Mutex::new(c)))),
-                    LoadOptions {
-                        keep_variables,
-                        keep_unavailable: false,
-                    },
+                    load_options,
                 ),
                 Err(e) => Message::Error(e),
             };
@@ -692,7 +677,7 @@ impl SystemState {
         let num_signals = signals.len() as u64;
         let start = web_time::Instant::now();
         let sender = self.channels.msg_sender.clone();
-
+        let max_url_length = self.user.config.max_url_length;
         match payload {
             LoadSignalPayload::Local(mut source, hierarchy) => {
                 let pool = Self::get_thread_pool();
@@ -714,13 +699,14 @@ impl SystemState {
                 });
             }
             LoadSignalPayload::Remote(server) => {
-                let task = async move {
-                    let res = crate::remote::get_signals(server.clone(), &signals)
-                        .await
-                        .map_err(|e| anyhow!("{e:?}"))
-                        .with_context(|| {
-                            format!("Failed to retrieve signals from remote server {server}")
-                        });
+                perform_async_work(async move {
+                    let res =
+                        crate::remote::get_signals(server.clone(), &signals, max_url_length, 0)
+                            .await
+                            .map_err(|e| anyhow!("{e:?}"))
+                            .with_context(|| {
+                                format!("Failed to retrieve signals from remote server {server}")
+                            });
 
                     let msg = match res {
                         Ok(loaded) => {
@@ -732,8 +718,7 @@ impl SystemState {
                     if let Err(e) = sender.send(msg) {
                         error!("Failed to send message: {e}");
                     }
-                };
-                spawn!(task);
+                });
             }
         }
 
@@ -782,5 +767,5 @@ pub fn draw_progress_information(ui: &mut egui::Ui, progress_data: &LoadProgress
                 .desired_width(300.);
             ui.add(progress_bar);
         }
-    };
+    }
 }

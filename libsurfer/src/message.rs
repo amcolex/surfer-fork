@@ -7,10 +7,11 @@ use ftr_parser::types::Transaction;
 use num::BigInt;
 use serde::Deserialize;
 use std::path::PathBuf;
-use surver::Status;
+use std::sync::Arc;
+use surver::SurverStatus;
 
 use crate::async_util::AsyncJob;
-use crate::config::PrimaryMouseDrag;
+use crate::config::{PrimaryMouseDrag, TransitionValue};
 use crate::displayed_item_tree::{ItemIndex, VisibleItemIndex};
 use crate::graphics::{Graphic, GraphicId};
 use crate::hierarchy::ParameterDisplayLocation;
@@ -32,7 +33,7 @@ use crate::{
     time::{TimeStringFormatting, TimeUnit},
     variable_filter::VariableIOFilterType,
     variable_name_type::VariableNameType,
-    wave_container::{ScopeRef, VariableRef, WaveContainer},
+    wave_container::{AnalogCacheKey, ScopeRef, VariableRef, WaveContainer},
     wave_source::{CxxrtlKind, LoadOptions, WaveFormat},
     wellen::{BodyResult, HeaderResult, LoadSignalsResult},
 };
@@ -85,7 +86,7 @@ pub enum Message {
     AddAllFromStreamScope(String),
     /// Reset the repeat command counter.
     InvalidateCount,
-    RemoveItemByIndex(VisibleItemIndex),
+    RemoveVisibleItems(MessageTarget<VisibleItemIndex>),
     RemoveItems(Vec<DisplayedItemRef>),
     /// Focus a wave/item.
     FocusItem(VisibleItemIndex),
@@ -110,6 +111,7 @@ pub enum Message {
     /// Change background color of waves/items. If first argument is None, change for selected items. If second argument is None, change to default value.
     ItemBackgroundColorChange(MessageTarget<VisibleItemIndex>, Option<String>),
     ItemNameChange(Option<VisibleItemIndex>, Option<String>),
+    ItemNameReset(MessageTarget<VisibleItemIndex>),
     /// Change scaling factor/height of waves/items. If first argument is None, change for selected items.
     ItemHeightScalingFactorChange(MessageTarget<VisibleItemIndex>, f32),
     /// Change variable name type of waves/items. If first argument is None, change for selected items.
@@ -119,6 +121,7 @@ pub enum Message {
     SetNameAlignRight(bool),
     SetClockHighlightType(ClockHighlightType),
     SetFillHighValues(bool),
+    SetDinotraceStyle(bool),
     // Reset the translator for this variable back to default. Sub-variables,
     // i.e. those with the variable idx and a shared path are also reset
     ResetVariableFormat(DisplayedFieldRef),
@@ -139,7 +142,7 @@ pub enum Message {
     /// Set cursor at time.
     CursorSet(BigInt),
     #[serde(skip)]
-    SurferServerStatus(web_time::Instant, String, Status),
+    SetSurverStatus(web_time::Instant, String, SurverStatus),
     /// Load file from file path.
     LoadFile(Utf8PathBuf, LoadOptions),
     /// Load file from URL.
@@ -190,7 +193,7 @@ pub enum Message {
     #[serde(skip)]
     Error(eyre::Error),
     #[serde(skip)]
-    TranslatorLoaded(#[debug(skip)] Box<DynTranslator>),
+    TranslatorLoaded(#[debug(skip)] Arc<DynTranslator>),
     /// Take note that the specified translator errored on a `translates` call on the
     /// specified variable
     BlacklistTranslator(VariableRef, String),
@@ -211,7 +214,7 @@ pub enum Message {
     /// However, there is a configuration setting that the user can overwrite.
     #[serde(skip)]
     SuggestReloadWaveform,
-    /// Close the 'reload_waveform' dialog.
+    /// Close the '`reload_waveform`' dialog.
     /// The `reload_file` boolean is the return value of the dialog.
     /// If `do_not_show_again` is true, the `reload_file` setting will be persisted.
     #[serde(skip)]
@@ -259,7 +262,12 @@ pub enum Message {
     SetTickLines(bool),
     SetVariableTooltip(bool),
     SetScopeTooltip(bool),
+    SetSurverFileWindowVisible(bool),
+    LoadSurverFileByIndex(Option<usize>, LoadOptions),
+    LoadSurverFileByName(String, LoadOptions),
+    SetTransitionValue(TransitionValue),
     ToggleFullscreen,
+    StopProgressTracker,
     /// Set which time unit to use.
     SetTimeUnit(TimeUnit),
     /// Set how to format the time strings. Passing None resets it to default.
@@ -361,6 +369,21 @@ pub enum Message {
     ExpandDrawnItem {
         item: DisplayedItemRef,
         levels: usize,
+    },
+    SetAnalogSettings(
+        MessageTarget<VisibleItemIndex>,
+        Option<crate::displayed_item::AnalogSettings>,
+    ),
+    BuildAnalogCache {
+        display_id: DisplayedItemRef,
+        cache_key: AnalogCacheKey,
+    },
+    #[serde(skip)]
+    AnalogCacheBuilt {
+        #[debug(skip)]
+        entry: Arc<crate::analog_signal_cache::AnalogCacheEntry>,
+        #[debug(skip)]
+        result: Result<crate::analog_signal_cache::AnalogSignalCache, String>,
     },
 
     SetViewportStrategy(ViewportStrategy),

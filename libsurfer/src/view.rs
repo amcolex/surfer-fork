@@ -1,6 +1,12 @@
 use crate::{
-    fzcmd::expand_command, menus::generic_context_menu, time::get_ticks,
+    config::{ThemeColorPair, TransitionValue},
+    dialog::{draw_open_sibling_state_file_dialog, draw_reload_waveform_dialog},
+    displayed_item::DisplayedVariable,
+    fzcmd::expand_command,
+    menus::generic_context_menu,
+    time::get_ticks,
     tooltips::variable_tooltip_text,
+    wave_container::{ScopeId, VarId, VariableMeta},
 };
 use ecolor::Color32;
 #[cfg(not(target_arch = "wasm32"))]
@@ -15,10 +21,11 @@ use epaint::{
     text::{FontId, LayoutJob, TextFormat, TextWrapMode},
 };
 use itertools::Itertools;
+use num::{BigInt, BigUint, One, Zero};
 use tracing::info;
 
 use surfer_translation_types::{
-    SubFieldFlatTranslationResult, TranslatedValue, Translator, VariableInfo,
+    TranslatedValue, Translator, VariableInfo, VariableValue,
     translator::{TrueName, VariableNameInfo},
 };
 
@@ -35,8 +42,8 @@ use crate::help::{
 use crate::time::time_string;
 use crate::transaction_container::TransactionStreamRef;
 use crate::translation::TranslationResultExt;
-use crate::util::uint_idx_to_alpha_idx;
-use crate::wave_container::{FieldRef, FieldRefExt, VariableRef, WaveContainer};
+use crate::util::get_alpha_focus_id;
+use crate::wave_container::{FieldRef, FieldRefExt, VariableRef};
 use crate::{
     Message, MoveDir, SystemState, command_prompt::show_command_prompt, hierarchy::HierarchyStyle,
     wave_data::WaveData,
@@ -58,6 +65,7 @@ pub struct DrawConfig {
 }
 
 impl DrawConfig {
+    #[must_use]
     pub fn new(canvas_height: f32, line_height: f32, text_size: f32) -> Self {
         Self {
             canvas_height,
@@ -132,6 +140,7 @@ pub enum ItemDrawingInfo {
 }
 
 impl ItemDrawingInfo {
+    #[must_use]
     pub fn top(&self) -> f32 {
         match self {
             ItemDrawingInfo::Variable(drawing_info) => drawing_info.top,
@@ -143,6 +152,7 @@ impl ItemDrawingInfo {
             ItemDrawingInfo::Placeholder(drawing_info) => drawing_info.top,
         }
     }
+    #[must_use]
     pub fn bottom(&self) -> f32 {
         match self {
             ItemDrawingInfo::Variable(drawing_info) => drawing_info.bottom,
@@ -154,6 +164,7 @@ impl ItemDrawingInfo {
             ItemDrawingInfo::Placeholder(drawing_info) => drawing_info.bottom,
         }
     }
+    #[must_use]
     pub fn vidx(&self) -> VisibleItemIndex {
         match self {
             ItemDrawingInfo::Variable(drawing_info) => drawing_info.vidx,
@@ -192,6 +203,12 @@ impl eframe::App for SystemState {
         self.timing.borrow_mut().end("draw");
 
         #[cfg(feature = "performance_plot")]
+        self.timing.borrow_mut().start("push_async_messages");
+        self.push_async_messages(&mut msgs);
+        #[cfg(feature = "performance_plot")]
+        self.timing.borrow_mut().end("push_async_messages");
+
+        #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().start("update");
         let ui_zoom_factor = self.ui_zoom_factor();
         if ctx.zoom_factor() != ui_zoom_factor {
@@ -214,12 +231,6 @@ impl eframe::App for SystemState {
         #[cfg(feature = "performance_plot")]
         self.timing.borrow_mut().end("update");
 
-        #[cfg(feature = "performance_plot")]
-        self.timing.borrow_mut().start("handle_async_messages");
-        self.handle_async_messages();
-        #[cfg(feature = "performance_plot")]
-        self.timing.borrow_mut().end("handle_async_messages");
-
         self.handle_batch_commands();
         #[cfg(target_arch = "wasm32")]
         self.handle_wasm_external_messages();
@@ -238,7 +249,7 @@ impl eframe::App for SystemState {
         };
 
         if let Some(waves) = self.user.waves.as_ref().and_then(|w| w.inner.as_waves()) {
-            waves.tick()
+            waves.tick();
         }
 
         if viewport_is_moving {
@@ -307,12 +318,12 @@ impl SystemState {
             self.draw_log_window(ctx, &mut msgs);
         }
 
-        if let Some(dialog) = &self.user.show_reload_suggestion {
-            self.draw_reload_waveform_dialog(ctx, dialog, &mut msgs);
+        if let Some(dialog) = self.user.show_reload_suggestion {
+            draw_reload_waveform_dialog(ctx, dialog, &mut msgs);
         }
 
-        if let Some(dialog) = &self.user.show_open_sibling_state_file_suggestion {
-            self.draw_open_sibling_state_file_dialog(ctx, dialog, &mut msgs);
+        if let Some(dialog) = self.user.show_open_sibling_state_file_suggestion {
+            draw_open_sibling_state_file_dialog(ctx, dialog, &mut msgs);
         }
 
         if self.user.show_performance {
@@ -342,8 +353,12 @@ impl SystemState {
             self.draw_load_url(ctx, &mut msgs);
         }
 
+        if self.user.show_server_file_window {
+            self.draw_surver_file_window(ctx, &mut msgs);
+        }
+
         if self.show_statusbar() {
-            self.add_statusbar_panel(ctx, &self.user.waves, &mut msgs);
+            self.add_statusbar_panel(ctx, self.user.waves.as_ref(), &mut msgs);
         }
         if let Some(waves) = &self.user.waves
             && self.show_overview()
@@ -490,7 +505,7 @@ impl SystemState {
                     style.visuals.widgets.noninteractive.bg_stroke = std_stroke;
                 });
             }
-        };
+        }
 
         if self.user.waves.is_none()
             || self
@@ -578,6 +593,9 @@ impl SystemState {
     }
 
     fn draw_item_focus_list(&self, ui: &mut Ui) {
+        let Some(waves) = self.user.waves.as_ref() else {
+            return;
+        };
         let alignment = self.get_name_alignment();
         ui.with_layout(
             Layout::top_down(alignment).with_cross_justify(false),
@@ -585,22 +603,14 @@ impl SystemState {
                 if self.show_default_timeline() {
                     ui.add_space(ui.text_style_height(&TextStyle::Body) + 2.0);
                 }
-                for (vidx, _) in self
-                    .user
-                    .waves
-                    .as_ref()
-                    .unwrap()
-                    .items_tree
-                    .iter_visible()
-                    .enumerate()
-                {
+                for (vidx, _) in waves.items_tree.iter_visible().enumerate() {
                     let vidx = VisibleItemIndex(vidx);
                     ui.scope(|ui| {
                         ui.style_mut().visuals.selection.bg_fill =
                             self.user.config.theme.accent_warn.background;
                         ui.style_mut().visuals.override_text_color =
                             Some(self.user.config.theme.accent_warn.foreground);
-                        let _ = ui.selectable_label(true, self.get_alpha_focus_id(vidx));
+                        let _ = ui.selectable_label(true, get_alpha_focus_id(vidx, waves));
                     });
                 }
             },
@@ -705,7 +715,7 @@ impl SystemState {
                         Layout::right_to_left(Align::TOP)
                     },
                     |ui| {
-                        ui.add_space(10.0 * *level as f32);
+                        ui.add_space(10.0 * f32::from(*level));
                         if any_groups {
                             let response =
                                 self.hierarchy_icon(ui, has_children, *unfolded, alignment);
@@ -790,11 +800,7 @@ impl SystemState {
     }
 
     fn get_name_alignment(&self) -> Align {
-        if self
-            .user
-            .align_names_right
-            .unwrap_or_else(|| self.user.config.layout.align_names_right())
-        {
+        if self.align_names_right() {
             Align::RIGHT
         } else {
             Align::LEFT
@@ -814,8 +820,7 @@ impl SystemState {
             if !modifiers.ctrl
                 && !(self.user.waves.as_ref())
                     .and_then(|w| w.items_tree.get_visible(vidx))
-                    .map(|i| i.selected)
-                    .unwrap_or(false)
+                    .is_some_and(|i| i.selected)
             {
                 msgs.push(Message::FocusItem(vidx));
                 msgs.push(Message::ItemSelectionClear);
@@ -844,6 +849,7 @@ impl SystemState {
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         ctx: &egui::Context,
+        meta: Option<&VariableMeta>,
     ) -> egui::Response {
         let mut variable_label = self.draw_item_label(
             vidx,
@@ -853,20 +859,26 @@ impl SystemState {
             msgs,
             ui,
             ctx,
+            meta,
         );
 
         if self.show_tooltip() {
             variable_label = variable_label.on_hover_ui(|ui| {
-                let tooltip = if let Some(waves) = &self.user.waves {
+                let tooltip = if self.user.waves.is_some() {
                     if field.field.is_empty() {
-                        let wave_container = waves.inner.as_waves().unwrap();
-                        let meta = wave_container.variable_meta(&field.root).ok();
-                        variable_tooltip_text(&meta, &field.root)
+                        if let Some(meta) = meta {
+                            variable_tooltip_text(Some(meta), &field.root)
+                        } else {
+                            let wave_container =
+                                self.user.waves.as_ref().unwrap().inner.as_waves().unwrap();
+                            let meta = wave_container.variable_meta(&field.root).ok();
+                            variable_tooltip_text(meta.as_ref(), &field.root)
+                        }
                     } else {
                         "From translator".to_string()
                     }
                 } else {
-                    "No VCD loaded".to_string()
+                    "No waveform loaded".to_string()
                 };
                 ui.set_max_width(ui.spacing().tooltip_width);
                 ui.add(egui::Label::new(tooltip));
@@ -922,6 +934,7 @@ impl SystemState {
                                             msgs,
                                             ui,
                                             ctx,
+                                            None,
                                         )
                                     },
                                 );
@@ -947,8 +960,7 @@ impl SystemState {
                                                 alignment,
                                             );
                                         },
-                                    )
-                                    .inner
+                                    );
                                 }
                             })
                     })
@@ -966,6 +978,7 @@ impl SystemState {
             | VariableInfo::Bits
             | VariableInfo::Clock
             | VariableInfo::String
+            | VariableInfo::Event
             | VariableInfo::Real => {
                 let label = ui
                     .with_layout(Layout::top_down(alignment).with_cross_justify(true), |ui| {
@@ -977,6 +990,7 @@ impl SystemState {
                             msgs,
                             ui,
                             ctx,
+                            None,
                         )
                     })
                     .inner;
@@ -1048,7 +1062,7 @@ impl SystemState {
             )
         });
 
-        let left_x = |level: u8| -> f32 { rect_with_margin.left() + level as f32 * 10.0 };
+        let left_x = |level: u8| -> f32 { rect_with_margin.left() + f32::from(level) * 10.0 };
         let Some(insert_level) = level_range.find_or_last(|&level| {
             let mut rect = expanded_rect.with_min_x(left_x(level));
             rect.set_width(10.0);
@@ -1076,8 +1090,7 @@ impl SystemState {
                     waves
                         .items_tree
                         .to_displayed(insert_vidx)
-                        .map(|index| index.0)
-                        .unwrap_or_else(|| waves.items_tree.len()),
+                        .map_or_else(|| waves.items_tree.len(), |index| index.0),
                 ),
                 level: insert_level,
             },
@@ -1094,82 +1107,85 @@ impl SystemState {
         msgs: &mut Vec<Message>,
         ui: &mut Ui,
         ctx: &egui::Context,
+        meta: Option<&VariableMeta>,
     ) -> egui::Response {
-        let text_color = {
-            let style = ui.style_mut();
+        let color_pair = {
             if self.item_is_focused(vidx) {
-                style.visuals.selection.bg_fill = self.user.config.theme.accent_info.background;
-                self.user.config.theme.accent_info.foreground
+                &self.user.config.theme.accent_info
             } else if self.item_is_selected(displayed_id) {
-                style.visuals.selection.bg_fill =
-                    self.user.config.theme.selected_elements_colors.background;
-                self.user.config.theme.selected_elements_colors.foreground
+                &self.user.config.theme.selected_elements_colors
             } else if matches!(
                 displayed_item,
                 DisplayedItem::Variable(_) | DisplayedItem::Placeholder(_)
             ) {
-                style.visuals.selection.bg_fill =
-                    self.user.config.theme.primary_ui_color.background;
-                self.user.config.theme.primary_ui_color.foreground
+                &self.user.config.theme.primary_ui_color
             } else {
-                style.visuals.selection.bg_fill =
-                    self.user.config.theme.primary_ui_color.background;
-                *self.get_item_text_color(displayed_item)
+                &ThemeColorPair {
+                    background: self.user.config.theme.primary_ui_color.background,
+                    foreground: self.get_item_text_color(displayed_item),
+                }
             }
         };
-
-        let monospace_font = ui.style().text_styles.get(&TextStyle::Monospace).unwrap();
-        let monospace_width = {
-            ui.fonts_mut(|fonts| {
-                fonts
-                    .layout_no_wrap(" ".to_string(), monospace_font.clone(), Color32::BLACK)
-                    .size()
-                    .x
-            })
-        };
-        let available_space = ui.available_width();
+        {
+            let style = ui.style_mut();
+            style.visuals.selection.bg_fill = color_pair.background;
+        }
 
         let mut layout_job = LayoutJob::default();
         match displayed_item {
             DisplayedItem::Variable(var) if field.is_some() => {
                 let field = field.unwrap();
                 if field.field.is_empty() {
-                    let wave_container =
-                        self.user.waves.as_ref().unwrap().inner.as_waves().unwrap();
-                    let name_info = self.get_variable_name_info(wave_container, &var.variable_ref);
+                    let name_info = self.get_variable_name_info(&var.variable_ref, meta);
 
                     if let Some(true_name) = name_info.and_then(|info| info.true_name) {
+                        let monospace_font =
+                            ui.style().text_styles.get(&TextStyle::Monospace).unwrap();
+                        let monospace_width = {
+                            ui.fonts_mut(|fonts| {
+                                fonts
+                                    .layout_no_wrap(
+                                        " ".to_string(),
+                                        monospace_font.clone(),
+                                        Color32::BLACK,
+                                    )
+                                    .size()
+                                    .x
+                            })
+                        };
+                        let available_width = ui.available_width();
+
                         draw_true_name(
                             &true_name,
                             &mut layout_job,
                             monospace_font.clone(),
-                            text_color,
+                            color_pair.foreground,
                             monospace_width,
-                            available_space,
-                        )
+                            available_width,
+                        );
                     } else {
                         displayed_item.add_to_layout_job(
-                            &text_color,
+                            color_pair.foreground,
                             ui.style(),
                             &mut layout_job,
                             Some(field),
                             &self.user.config,
-                        )
+                        );
                     }
                 } else {
                     RichText::new(field.field.last().unwrap().clone())
-                        .color(text_color)
+                        .color(color_pair.foreground)
                         .line_height(Some(self.user.config.layout.waveforms_line_height))
                         .append_to(
                             &mut layout_job,
                             ui.style(),
                             FontSelection::Default,
                             Align::Center,
-                        )
+                        );
                 }
             }
             _ => displayed_item.add_to_layout_job(
-                &text_color,
+                color_pair.foreground,
                 ui.style(),
                 &mut layout_job,
                 field,
@@ -1183,32 +1199,85 @@ impl SystemState {
                 WidgetText::LayoutJob(layout_job.into()),
             )
             .interact(Sense::drag());
-        item_label.context_menu(|ui| {
-            self.item_context_menu(field, msgs, ui, vidx);
-        });
 
-        if item_label.clicked() {
-            let focused = self.user.waves.as_ref().and_then(|w| w.focused_item);
-            let was_focused = focused == Some(vidx);
-            if was_focused {
-                msgs.push(Message::UnfocusItem);
-            } else {
-                let modifiers = ctx.input(|i| i.modifiers);
-                if modifiers.ctrl {
-                    msgs.push(Message::ToggleItemSelected(Some(vidx)));
-                } else if modifiers.shift {
+        // click can select and deselect, depending on previous selection state & modifiers
+        // with the rules:
+        // - a primary click on the single selected item will deselect it (so that there is a
+        //   way to deselect and get rid of the selection highlight)
+        // - a primary/secondary click otherwise will select just the clicked item
+        // - a secondary click on the selection will not change the selection
+        // - a click with shift added will select all items between focused and clicked
+        // - a click with control added will toggle the selection of the item
+        // - shift + control does not have special meaning
+        //
+        // We do not implement more complex behavior like the selection toggling
+        // that the windows explorer had in the past (with combined ctrl+shift)
+        if item_label.clicked() || item_label.secondary_clicked() {
+            let focused_item = self.user.waves.as_ref().and_then(|w| w.focused_item);
+            let is_focused = focused_item == Some(vidx);
+            let is_selected = self.item_is_selected(displayed_id);
+            let single_selected = self
+                .user
+                .waves
+                .as_ref()
+                .and_then(|w| {
+                    // FIXME check if this is fast
+                    let it = w.items_tree.iter_visible_selected();
+                    Some(it.count() == 1)
+                })
+                .unwrap();
+
+            let modifiers = ctx.input(|i| i.modifiers);
+            tracing::trace!(focused_item=?focused_item, is_focused=?is_focused, is_selected=?is_selected, single_selected=?single_selected, modifiers=?modifiers);
+
+            // allow us to deselect, but only do so if this is the only selected item
+            if item_label.clicked() && is_selected && single_selected {
+                msgs.push(Message::Batch(vec![
+                    Message::ItemSelectionClear,
+                    Message::UnfocusItem,
+                ]));
+                return item_label;
+            }
+
+            match (item_label.clicked(), modifiers.command, modifiers.shift) {
+                (false, false, false) if is_selected => {}
+                (_, false, false) => {
                     msgs.push(Message::Batch(vec![
                         Message::ItemSelectionClear,
-                        Message::ItemSelectRange(vidx),
-                    ]));
-                } else {
-                    msgs.push(Message::Batch(vec![
-                        Message::ItemSelectionClear,
+                        Message::SetItemSelected(vidx, true),
                         Message::FocusItem(vidx),
                     ]));
                 }
+                (_, _, true) => msgs.push(Message::Batch(vec![
+                    Message::ItemSelectRange(vidx),
+                    Message::FocusItem(vidx),
+                ])),
+                (_, true, false) => {
+                    if !is_selected {
+                        msgs.push(Message::Batch(vec![
+                            Message::SetItemSelected(vidx, true),
+                            Message::FocusItem(vidx),
+                        ]));
+                    } else if item_label.clicked() {
+                        msgs.push(Message::Batch(vec![
+                            Message::SetItemSelected(vidx, false),
+                            Message::UnfocusItem,
+                        ]))
+                    }
+                }
             }
         }
+
+        item_label.context_menu(|ui| {
+            self.item_context_menu(
+                field,
+                msgs,
+                ui,
+                vidx,
+                true,
+                crate::message::MessageTarget::CurrentSelection,
+            );
+        });
 
         item_label
     }
@@ -1224,7 +1293,16 @@ impl SystemState {
         ui: &mut Ui,
         ctx: &egui::Context,
     ) -> Rect {
-        let label = self.draw_item_label(vidx, displayed_id, displayed_item, None, msgs, ui, ctx);
+        let label = self.draw_item_label(
+            vidx,
+            displayed_id,
+            displayed_item,
+            None,
+            msgs,
+            ui,
+            ctx,
+            None,
+        );
 
         self.draw_drag_source(msgs, vidx, &label, ui.ctx().input(|e| e.modifiers));
         match displayed_item {
@@ -1270,7 +1348,7 @@ impl SystemState {
                     vidx,
                     top: label.rect.top(),
                     bottom: label.rect.bottom(),
-                }))
+                }));
             }
             &DisplayedItem::Variable(_) => {
                 panic!(
@@ -1279,18 +1357,6 @@ impl SystemState {
             }
         }
         label.rect
-    }
-
-    fn get_alpha_focus_id(&self, vidx: VisibleItemIndex) -> RichText {
-        let alpha_id = uint_idx_to_alpha_idx(
-            vidx,
-            self.user
-                .waves
-                .as_ref()
-                .map_or(0, |waves| waves.displayed_items.len()),
-        );
-
-        RichText::new(alpha_id).monospace()
     }
 
     fn item_is_focused(&self, vidx: VisibleItemIndex) -> bool {
@@ -1359,7 +1425,6 @@ impl SystemState {
                 .sorted_by_key(|o| o.top() as i32)
                 .enumerate()
             {
-                let vidx = drawing_info.vidx();
                 let next_y = ui.cursor().top();
                 // In order to align the text in this view with the variable tree,
                 // we need to keep track of how far away from the expected offset we are,
@@ -1369,7 +1434,7 @@ impl SystemState {
                 }
 
                 let backgroundcolor =
-                    &self.get_background_color(waves, drawing_info, vidx, item_count);
+                    self.get_background_color(waves, drawing_info.vidx(), item_count);
                 self.draw_background(
                     drawing_info,
                     y_zero,
@@ -1388,17 +1453,13 @@ impl SystemState {
                         let v = self.get_variable_value(
                             waves,
                             &drawing_info.displayed_field_ref,
-                            &ucursor,
+                            ucursor.as_ref(),
                         );
                         if let Some(v) = v {
                             ui.label(
                                 RichText::new(v)
                                     .color(
-                                        *self
-                                            .user
-                                            .config
-                                            .theme
-                                            .get_best_text_color(backgroundcolor),
+                                        self.user.config.theme.get_best_text_color(backgroundcolor),
                                     )
                                     .line_height(Some(
                                         self.user.config.layout.waveforms_line_height,
@@ -1411,7 +1472,9 @@ impl SystemState {
                                     )),
                                     msgs,
                                     ui,
-                                    vidx,
+                                    drawing_info.vidx,
+                                    true,
+                                    crate::message::MessageTarget::CurrentSelection,
                                 );
                             });
                         }
@@ -1427,10 +1490,17 @@ impl SystemState {
                             );
 
                             ui.label(RichText::new(format!("Δ: {delta}",)).color(
-                                *self.user.config.theme.get_best_text_color(backgroundcolor),
+                                self.user.config.theme.get_best_text_color(backgroundcolor),
                             ))
                             .context_menu(|ui| {
-                                self.item_context_menu(None, msgs, ui, vidx);
+                                self.item_context_menu(
+                                    None,
+                                    msgs,
+                                    ui,
+                                    drawing_info.vidx(),
+                                    true,
+                                    crate::message::MessageTarget::CurrentSelection,
+                                );
                             });
                         } else {
                             ui.label("");
@@ -1452,64 +1522,110 @@ impl SystemState {
         &self,
         waves: &WaveData,
         displayed_field_ref: &DisplayedFieldRef,
-        ucursor: &Option<num::BigUint>,
+        ucursor: Option<&num::BigUint>,
     ) -> Option<String> {
-        if let Some(ucursor) = ucursor {
-            let Some(DisplayedItem::Variable(displayed_variable)) =
-                waves.displayed_items.get(&displayed_field_ref.item)
-            else {
-                return None;
-            };
-            let variable = &displayed_variable.variable_ref;
-            let translator =
-                waves.variable_translator(&displayed_field_ref.without_field(), &self.translators);
-            let meta = waves.inner.as_waves().unwrap().variable_meta(variable);
+        let ucursor = ucursor?;
 
-            let translation_result = waves
-                .inner
-                .as_waves()
-                .unwrap()
-                .query_variable(variable, ucursor)
-                .ok()
-                .flatten()
-                .and_then(|q| q.current)
-                .map(|(_time, value)| meta.and_then(|meta| translator.translate(&meta, &value)));
+        let DisplayedItem::Variable(displayed_variable) =
+            waves.displayed_items.get(&displayed_field_ref.item)?
+        else {
+            return None;
+        };
 
-            if let Some(Ok(s)) = translation_result {
-                let fields = s.format_flat(
-                    &displayed_variable.format,
-                    &displayed_variable.field_formats,
-                    &self.translators,
-                );
+        let variable = &displayed_variable.variable_ref;
+        let meta = waves
+            .inner
+            .as_waves()
+            .unwrap()
+            .variable_meta(variable)
+            .ok()?;
+        let translator = waves.variable_translator_with_meta(
+            &displayed_field_ref.without_field(),
+            &self.translators,
+            &meta,
+        );
 
-                let subfield = fields
-                    .iter()
-                    .find(|res| res.names == displayed_field_ref.field);
+        let wave_container = waves.inner.as_waves().unwrap();
+        let query_result = wave_container
+            .query_variable(variable, ucursor)
+            .ok()
+            .flatten()?;
 
-                if let Some(SubFieldFlatTranslationResult {
-                    names: _,
-                    value: Some(TranslatedValue { value: v, kind: _ }),
-                }) = subfield
-                {
-                    Some(v.clone())
-                } else {
-                    Some("-".to_string())
-                }
-            } else {
-                None
-            }
-        } else {
-            None
+        let (time, val) = query_result.current?;
+        let curr = self.translate_query_result(
+            displayed_field_ref,
+            displayed_variable,
+            translator,
+            meta.clone(),
+            val,
+        );
+
+        // If time doesn't match cursor, i.e., we are not at a transition or the cursor is at zero
+        // or we want the next value after the transition, return current
+        if time != *ucursor
+            || (*ucursor).is_zero()
+            || self.transition_value() == TransitionValue::Next
+        {
+            return curr;
+        }
+
+        // Otherwise, we need to check the previous value for transition display
+        let prev_query_result = wave_container
+            .query_variable(variable, &(ucursor - BigUint::one()))
+            .ok()
+            .flatten()?;
+
+        let (_, prev_val) = prev_query_result.current?;
+        let prev = self.translate_query_result(
+            displayed_field_ref,
+            displayed_variable,
+            translator,
+            meta,
+            prev_val,
+        );
+
+        match self.transition_value() {
+            TransitionValue::Previous => Some(format!("←{}", prev.unwrap_or_default())),
+            TransitionValue::Both => match (curr, prev) {
+                (Some(curr_val), Some(prev_val)) => Some(format!("{prev_val} → {curr_val}")),
+                (None, Some(prev_val)) => Some(format!("{prev_val} →")),
+                (Some(curr_val), None) => Some(format!("→ {curr_val}")),
+                _ => None,
+            },
+            TransitionValue::Next => curr, // This will never happen due to the earlier check
+        }
+    }
+
+    fn translate_query_result(
+        &self,
+        displayed_field_ref: &DisplayedFieldRef,
+        displayed_variable: &DisplayedVariable,
+        translator: &dyn Translator<VarId, ScopeId, Message>,
+        meta: VariableMeta,
+        val: VariableValue,
+    ) -> Option<String> {
+        let translated = translator.translate(&meta, &val).ok()?;
+        let fields = translated.format_flat(
+            &displayed_variable.format,
+            &displayed_variable.field_formats,
+            &self.translators,
+        );
+
+        let subfield = fields
+            .iter()
+            .find(|res| res.names == displayed_field_ref.field)?;
+
+        match &subfield.value {
+            Some(TranslatedValue { value, .. }) => Some(value.clone()),
+            None => Some("-".to_string()),
         }
     }
 
     pub fn get_variable_name_info(
         &self,
-        wave_container: &WaveContainer,
         var: &VariableRef,
+        meta: Option<&VariableMeta>,
     ) -> Option<VariableNameInfo> {
-        let meta = wave_container.variable_meta(var).ok();
-
         self.variable_name_info_cache
             .borrow_mut()
             .entry(var.clone())
@@ -1531,19 +1647,18 @@ impl SystemState {
         ctx: &DrawingContext<'_>,
         gap: f32,
         frame_width: f32,
-        background_color: &Color32,
+        background_color: Color32,
     ) {
         // Draw background
         let min = (ctx.to_screen)(0.0, drawing_info.top() - y_zero - gap);
         let max = (ctx.to_screen)(frame_width, drawing_info.bottom() - y_zero + gap);
         ctx.painter
-            .rect_filled(Rect { min, max }, CornerRadiusF32::ZERO, *background_color);
+            .rect_filled(Rect { min, max }, CornerRadiusF32::ZERO, background_color);
     }
 
     pub fn get_background_color(
         &self,
         waves: &WaveData,
-        drawing_info: &ItemDrawingInfo,
         vidx: VisibleItemIndex,
         item_count: usize,
     ) -> Color32 {
@@ -1553,28 +1668,22 @@ impl SystemState {
         {
             return self.user.config.theme.highlight_background;
         }
-        *waves
+        waves
             .displayed_items
-            .get(
-                &waves
-                    .items_tree
-                    .get_visible(drawing_info.vidx())
-                    .unwrap()
-                    .item_ref,
-            )
+            .get(&waves.items_tree.get_visible(vidx).unwrap().item_ref)
             .and_then(super::displayed_item::DisplayedItem::background_color)
             .and_then(|color| self.user.config.theme.get_color(color))
             .unwrap_or_else(|| self.get_default_alternating_background_color(item_count))
     }
 
-    fn get_default_alternating_background_color(&self, item_count: usize) -> &Color32 {
+    fn get_default_alternating_background_color(&self, item_count: usize) -> Color32 {
         // Set background color
         if self.user.config.theme.alt_frequency != 0
             && (item_count / self.user.config.theme.alt_frequency) % 2 == 1
         {
-            &self.user.config.theme.canvas_colors.alt_background
+            self.user.config.theme.canvas_colors.alt_background
         } else {
-            &Color32::TRANSPARENT
+            Color32::TRANSPARENT
         }
     }
 
@@ -1595,11 +1704,11 @@ impl SystemState {
             &self.user.wanted_timeunit,
             &self.get_time_format(),
             &self.user.config,
-            &waves.num_timestamps().unwrap_or(1.into()),
+            &waves.num_timestamps().unwrap_or_else(BigInt::one),
         );
 
         waves.draw_ticks(
-            Some(&self.user.config.theme.foreground),
+            Some(self.user.config.theme.foreground),
             &ticks,
             ctx,
             0.0,
@@ -1660,7 +1769,7 @@ pub fn draw_true_name(
                         .rev()
                         .collect::<Vec<_>>();
                     if !before.is_empty() {
-                        before[0] = '…'
+                        before[0] = '…';
                     }
                     let mut after = after_chars
                         .into_iter()
@@ -1668,7 +1777,7 @@ pub fn draw_true_name(
                         .collect::<Vec<_>>();
                     if !after.is_empty() {
                         let last_elem = after.len() - 1;
-                        after[last_elem] = '…'
+                        after[last_elem] = '…';
                     }
 
                     (
@@ -1688,7 +1797,7 @@ pub fn draw_true_name(
                         .enumerate()
                         .map(|(i, c)| if i == from_this - 1 { '…' } else { c })
                         .collect();
-                    (line_num, "".to_string(), this, "".to_string())
+                    (line_num, String::new(), this, String::new())
                 };
 
             layout_job.append(
@@ -1726,7 +1835,7 @@ pub fn draw_true_name(
                     color: foreground.gamma_multiply(0.5),
                     ..Default::default()
                 },
-            )
+            );
         }
     }
 }

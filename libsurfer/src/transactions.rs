@@ -161,9 +161,7 @@ pub fn calculate_rows_of_stream(
         let start_time = transaction.get_start_time();
         let end_time = transaction.get_end_time();
 
-        while start_time > last_times_on_row[curr_row].0
-            && start_time < last_times_on_row[curr_row].1
-        {
+        while last_times_on_row[curr_row].1 > start_time {
             curr_row += 1;
             if last_times_on_row.len() <= curr_row {
                 last_times_on_row.push((BigUint::ZERO, BigUint::ZERO));
@@ -179,9 +177,8 @@ pub fn draw_transaction_variable_list(
     ui: &mut Ui,
     active_stream: &StreamScopeRef,
 ) {
-    let inner = match streams.inner.as_transactions() {
-        Some(tx) => tx,
-        None => return,
+    let Some(inner) = streams.inner.as_transactions() else {
+        return;
     };
     match active_stream {
         StreamScopeRef::Root => {
@@ -250,9 +247,10 @@ fn draw_transaction_stream_variables(
         let sorted_generators = stream
             .generators
             .iter()
-            .filter_map(|gen_id| match inner.get_generator(*gen_id) {
-                Some(g) => Some((*gen_id, g)),
-                None => {
+            .filter_map(|gen_id| {
+                if let Some(g) = inner.get_generator(*gen_id) {
+                    Some((*gen_id, g))
+                } else {
                     tracing::warn!(
                         "Generator ID {} not found in stream {}",
                         gen_id,

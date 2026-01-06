@@ -1,7 +1,7 @@
 use ecolor::Color32;
 use emath::{Align, Align2, Vec2};
 use epaint::{CubicBezierShape, FontId, Shape, Stroke};
-use num::BigInt;
+use num::{BigInt, One};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -18,6 +18,7 @@ pub enum Direction {
 }
 
 impl Direction {
+    #[must_use]
     pub fn as_vector(&self) -> Vec2 {
         match self {
             Direction::North => Vec2::new(0., -1.),
@@ -89,7 +90,7 @@ impl WaveData {
         theme: &SurferTheme,
     ) {
         let color = theme.variable_dontcare;
-        let num_timestamps = self.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = self.num_timestamps().unwrap_or_else(BigInt::one);
         for g in self.graphics.values() {
             match g {
                 Graphic::TextArrow {

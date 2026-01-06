@@ -52,7 +52,7 @@ mod main_impl {
         /// is implemented.
         #[clap(long, short, verbatim_doc_comment)]
         command_file: Option<Utf8PathBuf>,
-        /// Alias for --command_file to support VUnit
+        /// Alias for --`command_file` to support `VUnit`
         #[clap(long)]
         script: Option<Utf8PathBuf>,
 
@@ -82,43 +82,12 @@ mod main_impl {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn command_file_prefers_single_sources() {
-            // Only --command_file
-            let args = Args::parse_from(["surfer", "--command-file", "C:/tmp/cmds.sucl"]);
-            let cf = args.command_file().unwrap();
-            assert!(cf.ends_with("cmds.sucl"));
-
-            // Only --script
-            let args = Args::parse_from(["surfer", "--script", "C:/tmp/scr.sucl"]);
-            let cf = args.command_file().unwrap();
-            assert!(cf.ends_with("scr.sucl"));
-        }
-
-        #[test]
-        fn command_file_conflict_returns_none() {
-            let args = Args::parse_from([
-                "surfer",
-                "--command-file",
-                "C:/tmp/cmds.sucl",
-                "--script",
-                "C:/tmp/scr.sucl",
-            ]);
-            assert!(args.command_file().is_none());
-        }
-    }
-
     #[allow(dead_code)] // NOTE: Only used in desktop version
     fn startup_params_from_args(args: Args) -> StartupParams {
-        let startup_commands = if let Some(cmd_file) = args.command_file() {
-            read_command_file(cmd_file)
-        } else {
-            vec![]
-        };
+        let startup_commands = args
+            .command_file()
+            .map(read_command_file)
+            .unwrap_or_default();
         StartupParams {
             waves: args.wave_file.map(|s| string_to_wavesource(&s)),
             wcp_initiate: args.wcp_initiate,
@@ -134,6 +103,8 @@ mod main_impl {
         simple_eyre::install()?;
 
         logs::start_logging()?;
+
+        std::panic::set_hook(Box::new(panic_handler));
 
         // https://tokio.rs/tokio/topics/bridging
         // We want to run the gui in the main thread, but some long running tasks like
@@ -161,7 +132,7 @@ mod main_impl {
             let bind_addr = bind_address.unwrap_or(config.server.bind_address);
             let port = port.unwrap_or(config.server.port);
 
-            let res = runtime.block_on(surver::server_main(port, bind_addr, token, file, None));
+            let res = runtime.block_on(surver::surver_main(port, bind_addr, token, &[file], None));
             return res;
         }
 
@@ -217,7 +188,7 @@ mod main_impl {
                 let sender = state.channels.msg_sender.clone();
                 FileWatcher::new(&path, move || {
                     if let Err(e) = sender.send(Message::SuggestReloadWaveform) {
-                        error!("Message ReloadWaveform did not send:\n{e}")
+                        error!("Message ReloadWaveform did not send:\n{e}");
                     }
                 })
                 .inspect_err(|err| error!("Cannot set up the file watcher:\n{err}"))
@@ -252,18 +223,97 @@ mod main_impl {
 
         Ok(())
     }
+
+    fn panic_handler(info: &std::panic::PanicHookInfo) {
+        let backtrace = std::backtrace::Backtrace::force_capture();
+
+        eprintln!();
+        eprintln!("Surfer crashed due to a panic 😞");
+        eprintln!("Please report this issue at https://gitlab.com/surfer-project/surfer/-/issues");
+        eprintln!();
+        eprintln!("Some notes on reports:");
+        eprintln!(
+            "We are happy about any reports, but it makes it much easier for us to fix issues if you:",
+        );
+        eprintln!(" - Include the information below");
+        eprintln!(" - Try to reproduce the issue to give us steps on how to reproduce the issue");
+        eprintln!(" - Include (minimal) waveform file and state file you used");
+        eprintln!("   (you can upload those confidentially, for the surfer team only)");
+        eprintln!();
+
+        let location = info.location().unwrap();
+        let msg = if let Some(msg) = info.payload().downcast_ref::<&str>() {
+            (*msg).to_string()
+        } else if let Some(msg) = info.payload().downcast_ref::<String>() {
+            msg.clone()
+        } else {
+            "<panic message not a string>".to_owned()
+        };
+
+        eprintln!(
+            "Surfer version: {} (git: {})",
+            env!("CARGO_PKG_VERSION"),
+            env!("VERGEN_GIT_DESCRIBE"),
+        );
+        eprintln!(
+            "thread '{}' ({:?}) panicked at {}:{}:{:?}",
+            std::thread::current().name().unwrap_or("unknown"),
+            std::thread::current().id(),
+            location.file(),
+            location.line(),
+            location.column(),
+        );
+        eprintln!("  {msg}");
+        eprintln!();
+        eprintln!("backtrace:");
+        eprintln!("{backtrace}");
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn command_file_prefers_single_sources() {
+            // Only --command_file
+            let args = Args::parse_from(["surfer", "--command-file", "C:/tmp/cmds.sucl"]);
+            let cf = args.command_file().unwrap();
+            assert!(cf.ends_with("cmds.sucl"));
+
+            // Only --script
+            let args = Args::parse_from(["surfer", "--script", "C:/tmp/scr.sucl"]);
+            let cf = args.command_file().unwrap();
+            assert!(cf.ends_with("scr.sucl"));
+        }
+
+        #[test]
+        fn command_file_conflict_returns_none() {
+            let args = Args::parse_from([
+                "surfer",
+                "--command-file",
+                "C:/tmp/cmds.sucl",
+                "--script",
+                "C:/tmp/scr.sucl",
+            ]);
+            assert!(args.command_file().is_none());
+        }
+    }
 }
 
 #[cfg(target_arch = "wasm32")]
 mod main_impl {
     use eframe::wasm_bindgen::JsCast;
     use eframe::web_sys;
+    use libsurfer::logs;
     use libsurfer::wasm_api::WebHandle;
 
     // Calling main is not the intended way to start surfer, instead, it should be
     // started by `wasm_api::WebHandle`
     pub(crate) fn main() -> eyre::Result<()> {
         simple_eyre::install()?;
+
+        logs::start_logging()?;
+
         let document = web_sys::window()
             .expect("No window")
             .document()

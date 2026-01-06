@@ -1,6 +1,7 @@
 //! Utility functions.
-use crate::displayed_item_tree::VisibleItemIndex;
+use crate::{displayed_item_tree::VisibleItemIndex, wave_data::WaveData};
 use camino::Utf8PathBuf;
+use egui::RichText;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
@@ -8,6 +9,7 @@ use std::path::{Path, PathBuf};
 /// a-p. This is nice because it makes for some easily typed ids.
 /// The function first formats the number as a hex digit and then performs
 /// the mapping.
+#[must_use]
 pub fn uint_idx_to_alpha_idx(idx: VisibleItemIndex, nvariables: usize) -> String {
     // this calculates how many hex digits we need to represent nvariables
     // unwrap because the result should always fit into usize and because
@@ -37,8 +39,8 @@ pub fn uint_idx_to_alpha_idx(idx: VisibleItemIndex, nvariables: usize) -> String
         .collect()
 }
 
-/// This is the reverse function to uint_idx_to_alpha_idx.
-pub fn alpha_idx_to_uint_idx(idx: String) -> Option<VisibleItemIndex> {
+/// This is the reverse function to `uint_idx_to_alpha_idx`.
+pub fn alpha_idx_to_uint_idx(idx: &str) -> Option<VisibleItemIndex> {
     let mapped = idx
         .chars()
         .map(|c| match c {
@@ -64,6 +66,13 @@ pub fn alpha_idx_to_uint_idx(idx: String) -> Option<VisibleItemIndex> {
     usize::from_str_radix(&mapped, 16)
         .ok()
         .map(VisibleItemIndex)
+}
+
+#[must_use]
+pub fn get_alpha_focus_id(vidx: VisibleItemIndex, waves: &WaveData) -> RichText {
+    let alpha_id = uint_idx_to_alpha_idx(vidx, waves.displayed_items.len());
+
+    RichText::new(alpha_id).monospace()
 }
 
 /// This function searches upward from `start` for directories or files matching `item`. It returns
@@ -92,7 +101,8 @@ fn get_multi_extension_from_filename(filename: &str) -> Option<String> {
 
 /// Get the full extension of a path, including all extensions.
 /// For example, for "foo.tar.gz", this function returns "tar.gz", and not just "gz",
-/// like path.extension() would.
+/// like `path.extension()` would.
+#[must_use]
 pub fn get_multi_extension(path: &Utf8PathBuf) -> Option<String> {
     // Find the first . in the path, if any. Return the rest of the path.
     if let Some(filename) = path.file_name() {
@@ -138,7 +148,7 @@ mod tests {
 
         for (vidx, nvars) in cases {
             let s = uint_idx_to_alpha_idx(vidx, nvars);
-            let back = alpha_idx_to_uint_idx(s).expect("should parse back");
+            let back = alpha_idx_to_uint_idx(&s).expect("should parse back");
             assert_eq!(back, vidx);
         }
     }
@@ -146,12 +156,12 @@ mod tests {
     #[test]
     fn test_alpha_idx_to_uint_idx_invalid_input() {
         // Contains invalid character 'r' which is outside a-p
-        assert!(alpha_idx_to_uint_idx("ar".to_string()).is_none());
+        assert!(alpha_idx_to_uint_idx("ar").is_none());
         // Empty string should fail to parse as hex
-        assert!(alpha_idx_to_uint_idx("".to_string()).is_none());
+        assert!(alpha_idx_to_uint_idx("").is_none());
         // Mixed case / unexpected chars
-        assert!(alpha_idx_to_uint_idx("A".to_string()).is_none());
-        assert!(alpha_idx_to_uint_idx("-".to_string()).is_none());
+        assert!(alpha_idx_to_uint_idx("A").is_none());
+        assert!(alpha_idx_to_uint_idx("-").is_none());
     }
 
     #[test]
@@ -173,7 +183,7 @@ mod tests {
         // Trailing dot: extension becomes empty string
         assert_eq!(
             get_multi_extension_from_filename("foo."),
-            Some("".to_string())
+            Some(String::new())
         );
     }
 
@@ -199,7 +209,7 @@ mod tests {
         let name2 = "ß.";
         assert_eq!(
             get_multi_extension_from_filename(name2),
-            Some("".to_string())
+            Some(String::new())
         );
     }
 
@@ -232,7 +242,7 @@ mod tests {
         }
 
         // Start searching from c upwards, but only within root
-        let found = search_upward(&c, root, &item_name);
+        let found = search_upward(&c, root, item_name);
         // Expect closest-first order: c/target.txt, then a/target.txt
         assert_eq!(found, vec![item_c, item_a]);
     }

@@ -15,6 +15,9 @@ pub type ScopeRef = surfer_translation_types::ScopeRef<ScopeId>;
 pub type VariableRef = surfer_translation_types::VariableRef<VarId, ScopeId>;
 pub type VariableMeta = surfer_translation_types::VariableMeta<VarId, ScopeId>;
 
+/// Cache key for analog signal data: (`signal_id`, `translator_name`)
+pub type AnalogCacheKey = (SignalId, String);
+
 #[derive(Debug, Clone)]
 pub enum SimulationStatus {
     Paused,
@@ -44,6 +47,32 @@ pub enum VarId {
     Wellen(wellen::VarRef),
 }
 
+/// A backend-specific, numeric reference for fast access to the associated signal data.
+/// Used as cache key for signal data lookups.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SignalId {
+    #[default]
+    None,
+    Wellen(wellen::SignalRef),
+}
+
+/// Backend-agnostic enum for accessing signal data.
+/// Variants provide iteration over signal changes.
+pub enum SignalAccessor {
+    Wellen(crate::wellen::WellenSignalAccessor),
+    // Future: Cxxrtl(CxxrtlSignalAccessor),
+}
+
+impl SignalAccessor {
+    /// Iterator over signal changes as (`time_u64`, value) pairs
+    #[must_use]
+    pub fn iter_changes(&self) -> Box<dyn Iterator<Item = (u64, VariableValue)> + '_> {
+        match self {
+            SignalAccessor::Wellen(accessor) => accessor.iter_changes(),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct QueryResult {
     pub current: Option<(BigUint, VariableValue)>,
@@ -64,13 +93,13 @@ impl ScopeRefExt for ScopeRef {
     }
 
     fn from_strs_with_id(s: &[impl ToString], id: ScopeId) -> Self {
-        let strs = s.iter().map(std::string::ToString::to_string).collect();
+        let strs = s.iter().map(ToString::to_string).collect();
         Self { strs, id }
     }
 
-    /// Creates a ScopeRef from a string with each scope separated by `.`
+    /// Creates a `ScopeRef` from a string with each scope separated by `.`
     fn from_hierarchy_string(s: &str) -> Self {
-        let strs = s.split('.').map(std::string::ToString::to_string).collect();
+        let strs = s.split('.').map(ToString::to_string).collect();
         let id = ScopeId::default();
         Self { strs, id }
     }
@@ -117,10 +146,7 @@ impl VariableRefExt for VariableRef {
     }
 
     fn from_hierarchy_string(s: &str) -> Self {
-        let components = s
-            .split('.')
-            .map(std::string::ToString::to_string)
-            .collect::<Vec<_>>();
+        let components = s.split('.').map(ToString::to_string).collect::<Vec<_>>();
 
         if components.is_empty() {
             Self {
@@ -133,6 +159,27 @@ impl VariableRefExt for VariableRef {
                 path: ScopeRef::from_strs(&components[..(components.len()) - 1]),
                 name: components.last().unwrap().to_string(),
                 id: VarId::default(),
+            }
+        }
+    }
+
+    fn from_hierarchy_string_with_id(s: &str, id: VarId) -> Self {
+        let components = s
+            .split('.')
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>();
+
+        if components.is_empty() {
+            Self {
+                path: ScopeRef::empty(),
+                name: String::new(),
+                id,
+            }
+        } else {
+            Self {
+                path: ScopeRef::from_strs(&components[..(components.len()) - 1]),
+                name: components.last().unwrap().to_string(),
+                id,
             }
         }
     }
@@ -158,10 +205,7 @@ impl VariableRefExt for VariableRef {
     fn from_strs(s: &[&str]) -> Self {
         Self {
             path: ScopeRef::from_strs(&s[..(s.len() - 1)]),
-            name: s
-                .last()
-                .expect("from_strs called with an empty string")
-                .to_string(),
+            name: (*s.last().expect("from_strs called with an empty string")).to_string(),
             id: VarId::default(),
         }
     }
@@ -187,7 +231,7 @@ impl FieldRefExt for FieldRef {
     fn from_strs(root: &[&str], field: &[&str]) -> Self {
         Self {
             root: VariableRef::from_strs(root),
-            field: field.iter().map(std::string::ToString::to_string).collect(),
+            field: field.iter().map(ToString::to_string).collect(),
         }
     }
 }
@@ -201,20 +245,26 @@ pub enum WaveContainer {
 }
 
 impl WaveContainer {
+    #[must_use]
     pub fn new_waveform(hierarchy: std::sync::Arc<wellen::Hierarchy>) -> Self {
         WaveContainer::Wellen(Box::new(WellenContainer::new(hierarchy, None)))
     }
 
+    #[must_use]
     pub fn new_remote_waveform(
-        server_url: String,
+        server_url: &str,
         hierarchy: std::sync::Arc<wellen::Hierarchy>,
     ) -> Self {
-        WaveContainer::Wellen(Box::new(WellenContainer::new(hierarchy, Some(server_url))))
+        WaveContainer::Wellen(Box::new(WellenContainer::new(
+            hierarchy,
+            Some(server_url.to_string()),
+        )))
     }
 
     /// Creates a new empty wave container. Should only be used as a default for serde. If
-    /// no wave container is present, the WaveData should be None, rather than this being
+    /// no wave container is present, the `WaveData` should be None, rather than this being
     /// Empty
+    #[must_use]
     pub fn __new_empty() -> Self {
         WaveContainer::Empty
     }
@@ -228,6 +278,7 @@ impl WaveContainer {
         }
     }
 
+    #[must_use]
     pub fn wants_anti_aliasing(&self) -> bool {
         match self {
             WaveContainer::Wellen(_) => true,
@@ -240,6 +291,7 @@ impl WaveContainer {
     /// Returns true if all requested signals have been loaded.
     /// Used for testing to make sure the GUI is at its final state before taking a
     /// snapshot.
+    #[must_use]
     pub fn is_fully_loaded(&self) -> bool {
         match self {
             WaveContainer::Wellen(f) => f.is_fully_loaded(),
@@ -249,6 +301,7 @@ impl WaveContainer {
     }
 
     /// Returns the full names of all variables in the design.
+    #[must_use]
     pub fn variable_names(&self) -> Vec<String> {
         match self {
             WaveContainer::Wellen(f) => f.variable_names(),
@@ -259,15 +312,17 @@ impl WaveContainer {
     }
 
     /// Return all variables (excluding parameters) in the whole design.
-    pub fn variables(&self, include_parameters: bool) -> Vec<VariableRef> {
+    #[must_use]
+    pub fn variables(&self) -> Vec<VariableRef> {
         match self {
-            WaveContainer::Wellen(f) => f.variables(include_parameters),
+            WaveContainer::Wellen(f) => f.variables(),
             WaveContainer::Empty => vec![],
             WaveContainer::Cxxrtl(_) => vec![],
         }
     }
 
     /// Return all variables (excluding parameters) in a scope.
+    #[must_use]
     pub fn variables_in_scope(&self, scope: &ScopeRef) -> Vec<VariableRef> {
         match self {
             WaveContainer::Wellen(f) => f.variables_in_scope(scope),
@@ -277,6 +332,7 @@ impl WaveContainer {
     }
 
     /// Return all parameters in a scope.
+    #[must_use]
     pub fn parameters_in_scope(&self, scope: &ScopeRef) -> Vec<VariableRef> {
         match self {
             WaveContainer::Wellen(f) => f.parameters_in_scope(scope),
@@ -287,6 +343,7 @@ impl WaveContainer {
     }
 
     /// Return true if there are no variables or parameters in the scope.
+    #[must_use]
     pub fn no_variables_in_scope(&self, scope: &ScopeRef) -> bool {
         match self {
             WaveContainer::Wellen(f) => f.no_variables_in_scope(scope),
@@ -358,7 +415,36 @@ impl WaveContainer {
         }
     }
 
+    pub fn signal_accessor(&self, signal_id: SignalId) -> Result<SignalAccessor> {
+        match (self, signal_id) {
+            (WaveContainer::Wellen(f), SignalId::Wellen(signal_ref)) => {
+                Ok(SignalAccessor::Wellen(f.signal_accessor(signal_ref)?))
+            }
+            _ => bail!("Invalid signal accessor combination"),
+        }
+    }
+    /// Get the `SignalId` for a variable (canonical signal identity for cache keys)
+    pub fn signal_id(&self, variable: &VariableRef) -> Result<SignalId> {
+        match self {
+            WaveContainer::Wellen(f) => Ok(SignalId::Wellen(f.signal_ref(variable)?)),
+            WaveContainer::Empty => bail!("No signal data"),
+            WaveContainer::Cxxrtl(_) => bail!("Not supported for Cxxrtl yet"),
+        }
+    }
+
+    /// Check if a signal is already loaded (data available)
+    #[must_use]
+    pub fn is_signal_loaded(&self, signal_id: &SignalId) -> bool {
+        match (self, signal_id) {
+            (WaveContainer::Wellen(f), SignalId::Wellen(signal_ref)) => {
+                f.is_signal_loaded(*signal_ref)
+            }
+            _ => false,
+        }
+    }
+
     /// Looks up the variable _by name_ and returns a new reference with an updated `id` if the variable is found.
+    #[must_use]
     pub fn update_variable_ref(&self, variable: &VariableRef) -> Option<VariableRef> {
         match self {
             WaveContainer::Wellen(f) => f.update_variable_ref(variable),
@@ -368,6 +454,7 @@ impl WaveContainer {
     }
 
     /// Returns the full names of all scopes in the design.
+    #[must_use]
     pub fn scope_names(&self) -> Vec<String> {
         match self {
             WaveContainer::Wellen(f) => f.scope_names(),
@@ -382,6 +469,7 @@ impl WaveContainer {
         }
     }
 
+    #[must_use]
     pub fn metadata(&self) -> MetaData {
         match self {
             WaveContainer::Wellen(f) => f.metadata(),
@@ -407,6 +495,7 @@ impl WaveContainer {
         }
     }
 
+    #[must_use]
     pub fn root_scopes(&self) -> Vec<ScopeRef> {
         match self {
             WaveContainer::Wellen(f) => f.root_scopes(),
@@ -423,6 +512,7 @@ impl WaveContainer {
         }
     }
 
+    #[must_use]
     pub fn max_timestamp(&self) -> Option<BigUint> {
         match self {
             WaveContainer::Wellen(f) => f.max_timestamp(),
@@ -435,6 +525,7 @@ impl WaveContainer {
         }
     }
 
+    #[must_use]
     pub fn scope_exists(&self, scope: &ScopeRef) -> bool {
         match self {
             WaveContainer::Wellen(f) => f.scope_exists(scope),
@@ -443,8 +534,19 @@ impl WaveContainer {
         }
     }
 
+    #[must_use]
+    /// True if scope is a compound variable
+    pub fn scope_is_variable(&self, scope: &ScopeRef) -> bool {
+        match self {
+            WaveContainer::Wellen(f) => f.scope_is_variable(scope),
+            WaveContainer::Empty => false,
+            WaveContainer::Cxxrtl(_) => false, // TODO: Check if scope is variable
+        }
+    }
+
     /// Returns a human readable string with information about a scope.
     /// The scope name itself should not be included, since it will be prepended automatically.
+    #[must_use]
     pub fn get_scope_tooltip_data(&self, scope: &ScopeRef) -> String {
         match self {
             WaveContainer::Wellen(f) => f.get_scope_tooltip_data(scope),
@@ -457,6 +559,7 @@ impl WaveContainer {
     /// Returns the simulation status for this wave source if it exists. Wave sources which have no
     /// simulation status should return None here, otherwise buttons for controlling simulation
     /// will be shown
+    #[must_use]
     pub fn simulation_status(&self) -> Option<SimulationStatus> {
         match self {
             WaveContainer::Wellen(_) => None,
@@ -494,11 +597,19 @@ impl WaveContainer {
         }
     }
 
+    #[must_use]
     pub fn body_loaded(&self) -> bool {
         match self {
             WaveContainer::Wellen(inner) => inner.body_loaded(),
             WaveContainer::Empty => true,
             WaveContainer::Cxxrtl(_) => true,
         }
+    }
+
+    /// Returns true if this wave container supports analog rendering options in the GUI.
+    /// Currently only the wellen backend (VCD/FST/GHW) supports analog rendering.
+    #[must_use]
+    pub fn supports_analog(&self) -> bool {
+        matches!(self, WaveContainer::Wellen(_))
     }
 }

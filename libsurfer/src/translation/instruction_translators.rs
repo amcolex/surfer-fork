@@ -1,4 +1,4 @@
-use super::{TranslationPreference, ValueKind, check_single_wordlength, no_of_digits};
+use super::{TranslationPreference, ValueKind, check_single_wordlength};
 use crate::wave_container::{ScopeId, VarId, VariableMeta};
 
 use eyre::Result;
@@ -8,7 +8,7 @@ use surfer_translation_types::{BasicTranslator, VariableValue, check_vector_vari
 pub struct InstructionTranslator {
     pub name: String,
     pub decoder: Decoder,
-    pub num_bits: u64,
+    pub num_bits: u32,
 }
 
 impl BasicTranslator<VarId, ScopeId> for InstructionTranslator {
@@ -16,9 +16,9 @@ impl BasicTranslator<VarId, ScopeId> for InstructionTranslator {
         self.name.clone()
     }
 
-    fn basic_translate(&self, num_bits: u64, value: &VariableValue) -> (String, ValueKind) {
+    fn basic_translate(&self, num_bits: u32, value: &VariableValue) -> (String, ValueKind) {
         let u64_value = match value {
-            VariableValue::BigUint(v) => v.to_u64_digits().last().cloned(),
+            VariableValue::BigUint(v) => v.to_u64_digits().last().copied(),
             VariableValue::String(s) => match check_vector_variable(s) {
                 Some(v) => return v,
                 None => u64::from_str_radix(s, 2).ok(),
@@ -35,7 +35,7 @@ impl BasicTranslator<VarId, ScopeId> for InstructionTranslator {
                 format!(
                     "UNKNOWN INSN ({:#0width$x})",
                     u64_value,
-                    width = no_of_digits(num_bits, 4) + 2
+                    width = num_bits.div_ceil(4) as usize + 2
                 ),
                 ValueKind::Warn,
             ),
@@ -43,10 +43,11 @@ impl BasicTranslator<VarId, ScopeId> for InstructionTranslator {
     }
 
     fn translates(&self, variable: &VariableMeta) -> Result<TranslationPreference> {
-        check_single_wordlength(variable.num_bits, self.num_bits as u32)
+        check_single_wordlength(variable.num_bits, self.num_bits)
     }
 }
 
+#[must_use]
 pub fn new_rv32_translator() -> InstructionTranslator {
     InstructionTranslator {
         name: "RV32".into(),
@@ -88,6 +89,7 @@ pub fn new_rv32_translator() -> InstructionTranslator {
     }
 }
 
+#[must_use]
 pub fn new_rv64_translator() -> InstructionTranslator {
     InstructionTranslator {
         name: "RV64".into(),
@@ -136,6 +138,7 @@ pub fn new_rv64_translator() -> InstructionTranslator {
     }
 }
 
+#[must_use]
 pub fn new_mips_translator() -> InstructionTranslator {
     InstructionTranslator {
         name: "MIPS".into(),
@@ -147,6 +150,7 @@ pub fn new_mips_translator() -> InstructionTranslator {
     }
 }
 
+#[must_use]
 pub fn new_la64_translator() -> InstructionTranslator {
     InstructionTranslator {
         name: "LA64".into(),

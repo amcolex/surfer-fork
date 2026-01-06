@@ -115,7 +115,7 @@ impl SystemState {
                 Message::SetUrlEntryVisible(
                     true,
                     Some(Box::new(|url: String| {
-                        Message::LoadWaveformFileFromUrl(url.clone(), LoadOptions::clean())
+                        Message::LoadWaveformFileFromUrl(url.clone(), LoadOptions::Clear)
                     })),
                 ),
                 true,
@@ -136,6 +136,17 @@ impl SystemState {
                 Message::OpenCommandFileDialog,
                 true,
             );
+            if self.user.surver_url.is_some() {
+                ui.separator();
+                add_toolbar_button(
+                    ui,
+                    msgs,
+                    icons::FILE_LIST_FILL,
+                    "Select Surver file",
+                    Message::SetSurverFileWindowVisible(true),
+                    true,
+                );
+            }
             ui.separator();
             add_toolbar_button(
                 ui,

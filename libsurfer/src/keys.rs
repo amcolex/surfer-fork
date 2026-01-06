@@ -65,7 +65,7 @@ impl SystemState {
                         }
                     }
                     (Key::Space, true, false, false) => {
-                        msgs.push(Message::ShowCommandPrompt("".to_string(), None))
+                        msgs.push(Message::ShowCommandPrompt(String::new(), None));
                     }
                     (Key::Escape, true, true, false) => msgs.push(Message::HideCommandPrompt),
                     (Key::Escape, true, false, false) => {
@@ -81,15 +81,18 @@ impl SystemState {
                         }
                     }
                     (Key::B, true, false, false) => {
-                        msgs.push(Message::SetSidePanelVisible(!self.show_hierarchy()))
+                        msgs.push(Message::SetSidePanelVisible(!self.show_hierarchy()));
+                    }
+                    (Key::D, true, false, false) => {
+                        msgs.push(Message::AddDivider(None, None));
                     }
                     (Key::E, true, false, false) => msgs.push(Message::GoToEnd { viewport_idx: 0 }),
                     (Key::F, true, false, false) => {
-                        msgs.push(Message::ShowCommandPrompt("item_focus ".to_string(), None))
+                        msgs.push(Message::ShowCommandPrompt("item_focus ".to_string(), None));
                     }
                     (Key::G, true, true, false) => {
                         if modifiers.command {
-                            msgs.push(Message::HideCommandPrompt)
+                            msgs.push(Message::HideCommandPrompt);
                         }
                     }
                     (Key::G, true, false, false) => {
@@ -98,7 +101,7 @@ impl SystemState {
                             before: None,
                             items: None,
                         });
-                        msgs.push(Message::ShowCommandPrompt("item_rename ".to_owned(), None))
+                        msgs.push(Message::ShowCommandPrompt("item_rename ".to_owned(), None));
                     }
                     (Key::H, true, false, false) => msgs.push(Message::MoveCursorToTransition {
                         next: false,
@@ -191,7 +194,7 @@ impl SystemState {
                         }
                     }
                     (Key::T, true, false, false) => {
-                        msgs.push(Message::SetToolbarVisible(!self.show_toolbar()))
+                        msgs.push(Message::SetToolbarVisible(!self.show_toolbar()));
                     }
                     (Key::U, true, false, false) => {
                         if modifiers.shift {
@@ -333,21 +336,7 @@ impl SystemState {
                         msgs.push(Message::InvalidateCount);
                     }
                     (Key::Delete | Key::X, true, false, false) => {
-                        if let Some(waves) = &self.user.waves {
-                            let mut remove_ids = waves
-                                .items_tree
-                                .iter_visible_selected()
-                                .map(|i| i.item_ref)
-                                .collect::<Vec<_>>();
-                            if let Some(node) = waves
-                                .focused_item
-                                .and_then(|focus| waves.items_tree.get_visible(focus))
-                            {
-                                remove_ids.push(node.item_ref)
-                            }
-
-                            msgs.push(Message::RemoveItems(remove_ids));
-                        }
+                        msgs.push(Message::RemoveVisibleItems(MessageTarget::CurrentSelection));
                     }
                     _ => {}
                 },

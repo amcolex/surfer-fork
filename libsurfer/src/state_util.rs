@@ -6,17 +6,17 @@ use egui::Modifiers;
 use crate::{
     SystemState,
     clock_highlighting::ClockHighlightType,
-    config::{ArrowKeyBindings, AutoLoad, PrimaryMouseDrag},
+    config::{ArrowKeyBindings, AutoLoad, PrimaryMouseDrag, TransitionValue},
     displayed_item::DisplayedItem,
     hierarchy::{HierarchyStyle, ParameterDisplayLocation},
 };
 
 impl SystemState {
     #[inline]
-    pub fn get_item_text_color(&self, item: &DisplayedItem) -> &Color32 {
+    pub fn get_item_text_color(&self, item: &DisplayedItem) -> Color32 {
         item.color()
             .and_then(|color| self.user.config.theme.get_color(color))
-            .unwrap_or(&self.user.config.theme.primary_ui_color.foreground)
+            .unwrap_or(self.user.config.theme.primary_ui_color.foreground)
     }
 
     #[inline]
@@ -188,5 +188,26 @@ impl SystemState {
         self.user
             .parameter_display_location
             .unwrap_or_else(|| self.user.config.layout.parameter_display_location())
+    }
+
+    #[inline]
+    pub fn use_dinotrace_style(&self) -> bool {
+        self.user
+            .use_dinotrace_style
+            .unwrap_or_else(|| self.user.config.layout.use_dinotrace_style())
+    }
+
+    #[inline]
+    pub fn transition_value(&self) -> TransitionValue {
+        self.user
+            .transition_value
+            .unwrap_or_else(|| self.user.config.layout.transition_value())
+    }
+
+    #[inline]
+    pub fn align_names_right(&self) -> bool {
+        self.user
+            .align_names_right
+            .unwrap_or_else(|| self.user.config.layout.align_names_right())
     }
 }

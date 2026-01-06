@@ -18,7 +18,7 @@ use crate::{
     Message, MoveDir, StartupParams, SystemState, WaveSource,
     async_util::AsyncJob,
     clock_highlighting::ClockHighlightType,
-    config::SurferConfig,
+    config::{SurferConfig, TransitionValue},
     displayed_item::{DisplayedFieldRef, DisplayedItemRef},
     displayed_item_tree::VisibleItemIndex,
     graphics::{Direction, GrPoint, Graphic, GraphicId},
@@ -91,7 +91,18 @@ pub(crate) fn render_and_compare_inner(
             ctx.memory_mut(|mem| mem.options.tessellation_options.feathering = feathering);
             ctx.set_visuals(state.get_visuals());
             setup_custom_font(ctx);
-            state.draw(ctx, Some(size));
+            let msgs = state.draw(ctx, Some(size));
+            // Process only BuildAnalogCache messages as other messages can be fuzzy (command matcher)
+            for msg in msgs {
+                if matches!(msg, Message::BuildAnalogCache { .. }) {
+                    state.update(msg);
+                }
+            }
+            // Wait for analog cache builds to complete
+            while !state.analog_caches_ready() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                state.handle_async_messages();
+            }
         },
         Some(egui_skia_renderer::RasterizeOptions {
             frames_before_screenshot: 5,
@@ -179,7 +190,7 @@ pub(crate) fn render_and_compare_inner(
 }
 
 pub(crate) fn render_and_compare(filename: &Path, state: impl Fn() -> SystemState) {
-    render_and_compare_inner(filename, state, Vec2::new(1280., 720.), false, 0.99999)
+    render_and_compare_inner(filename, state, Vec2::new(1280., 720.), false, 0.99999);
 }
 
 macro_rules! snapshot_ui {
@@ -380,7 +391,7 @@ fn render_readme_screenshot() {
         Vec2::new(1440., 810.),
         true,
         0.99,
-    )
+    );
 }
 
 snapshot_ui! {startup_screen_looks_fine, || {
@@ -716,6 +727,37 @@ snapshot_ui_with_file_and_msgs! {markers_dialog_work, "examples/counter.vcd", [
     Message::SetCursorWindowVisible(true)
 ]}
 
+snapshot_ui_with_file_and_msgs! {transition_value_next, "examples/counter.vcd", [
+    Message::SetOverviewVisible(true),
+    Message::SetTransitionValue(TransitionValue::Next),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::CursorSet(BigInt::from(390)),
+]}
+
+snapshot_ui_with_file_and_msgs! {transition_value_previous, "examples/counter.vcd", [
+    Message::SetOverviewVisible(true),
+    Message::SetTransitionValue(TransitionValue::Previous),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::CursorSet(BigInt::from(390)),
+]}
+
+snapshot_ui_with_file_and_msgs! {transition_value_both, "examples/counter.vcd", [
+    Message::SetOverviewVisible(true),
+    Message::SetTransitionValue(TransitionValue::Both),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::CursorSet(BigInt::from(390)),
+]}
+
+snapshot_ui_with_file_and_msgs! {transition_value_both_zero_works, "examples/counter.vcd", [
+    Message::SetOverviewVisible(true),
+    Message::SetTransitionValue(TransitionValue::Both),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::CursorSet(BigInt::from(0)),
+]}
+
 snapshot_ui_with_file_and_msgs! {add_move_delete_marker, "examples/counter.vcd", [
     Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")]),
     // Add marker with name
@@ -745,8 +787,8 @@ snapshot_ui_with_file_and_msgs! {goto_markers, "examples/counter.vcd", [
 snapshot_ui_with_file_and_msgs! {delete_markers_via_item, "examples/counter.vcd", [
     Message::AddVariables(vec![VariableRef::from_hierarchy_string("tb.dut.counter")]),
     Message::AddMarker{time: 200.into(), name: None, move_focus: true},
-    Message::RemoveItemByIndex(VisibleItemIndex(1)),
-    Message::RemoveItemByIndex(VisibleItemIndex(1)),
+    Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
+    Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {
@@ -800,7 +842,7 @@ snapshot_ui_with_file_and_msgs! {toggle_tick_lines, "examples/counter.vcd", [
 
 snapshot_ui_with_file_and_msgs! {command_prompt, "examples/counter.vcd", [
     Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::ShowCommandPrompt("".to_string(), None)
+    Message::ShowCommandPrompt(String::new(), None)
 ]}
 
 snapshot_ui_with_file_and_msgs! {command_prompt_with_init_text, "examples/counter.vcd", [
@@ -809,7 +851,7 @@ snapshot_ui_with_file_and_msgs! {command_prompt_with_init_text, "examples/counte
 ]}
 
 snapshot_ui_with_file_and_msgs! {command_prompt_next_command, "examples/counter.vcd", [
-    Message::ShowCommandPrompt("".to_string(), None),
+    Message::ShowCommandPrompt(String::new(), None),
     Message::CommandPromptUpdate { suggestions: vec![("test".to_string(), vec![true, true, false, false]); 10] },
     Message::SelectNextCommand,
     Message::SelectNextCommand,
@@ -819,7 +861,7 @@ snapshot_ui_with_file_and_msgs! {command_prompt_next_command, "examples/counter.
 ]}
 
 snapshot_ui_with_file_and_msgs! {command_prompt_prev_command, "examples/counter.vcd", [
-    Message::ShowCommandPrompt("".to_string(), None),
+    Message::ShowCommandPrompt(String::new(), None),
     Message::CommandPromptUpdate { suggestions: vec![("test".to_string(), vec![true, true, false, false]); 10] },
     Message::SelectNextCommand,
     Message::SelectNextCommand,
@@ -857,11 +899,21 @@ snapshot_ui_with_file_and_msgs! {command_prompt_prev_command, "examples/counter.
 //     Message::SelectNextCommand
 // ]}
 
+snapshot_ui_with_file_and_msgs! {command_prompt_focus, "examples/counter.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::ShowCommandPrompt("item_focus ".to_string(), None)
+]}
+
+snapshot_ui_with_file_and_msgs! {command_prompt_focus_item_selected, "examples/counter.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
+    Message::ShowCommandPrompt("item_focus b".to_string(), None)
+]}
+
 snapshot_ui_with_file_and_msgs!(
     command_prompt_scroll_bounds_prev,
     "examples/counter.vcd",
     [
-        Message::ShowCommandPrompt("".to_string(), None),
+        Message::ShowCommandPrompt(String::new(), None),
         Message::CommandPromptUpdate {
             suggestions: vec![("test".to_string(), vec![true, true, false, false]); 5]
         },
@@ -873,7 +925,7 @@ snapshot_ui_with_file_and_msgs!(
     command_prompt_scroll_bounds_next,
     "examples/counter.vcd",
     [
-        Message::ShowCommandPrompt("".to_string(), None),
+        Message::ShowCommandPrompt(String::new(), None),
         Message::CommandPromptUpdate {
             suggestions: vec![("test".to_string(), vec![true, true, false, false]); 5]
         },
@@ -929,25 +981,25 @@ snapshot_ui_with_file_and_msgs! {height_scaling, "examples/counter.vcd", [
 
 snapshot_ui_with_file_and_msgs! {remove_item, "examples/counter.vcd", [
     Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
-    Message::RemoveItemByIndex(VisibleItemIndex(1))
+    Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {remove_item_with_focus, "examples/counter.vcd", [
     Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
     Message::FocusItem(VisibleItemIndex(1)),
-    Message::RemoveItemByIndex(VisibleItemIndex(1))
+    Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {remove_item_before_focus, "examples/counter.vcd", [
     Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
     Message::FocusItem(VisibleItemIndex(3)),
-    Message::RemoveItemByIndex(VisibleItemIndex(1))
+    Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(1))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {remove_item_after_focus, "examples/counter.vcd", [
     Message::AddScope(ScopeRef::from_strs(&["tb"]), false),
     Message::FocusItem(VisibleItemIndex(1)),
-    Message::RemoveItemByIndex(VisibleItemIndex(2))
+    Message::RemoveVisibleItems(MessageTarget::Explicit(VisibleItemIndex(2))),
 ]}
 
 snapshot_ui_with_file_and_msgs! {canvas_scroll, "examples/counter.vcd", [
@@ -1477,10 +1529,7 @@ snapshot_ui!(load_keep_all_works, || {
                 .join("xx_2.vcd")
                 .try_into()
                 .unwrap(),
-            LoadOptions {
-                keep_variables: true,
-                keep_unavailable: true,
-            },
+            LoadOptions::KeepAll,
         ),
     ];
     for message in msgs {
@@ -1489,8 +1538,8 @@ snapshot_ui!(load_keep_all_works, || {
     loop {
         state.handle_async_messages();
         state.handle_batch_commands();
-        if let Some(waves) = &state.user.waves {
-            if waves.source
+        if let Some(waves) = &state.user.waves
+            && waves.source
                 == WaveSource::File(
                     get_project_root()
                         .unwrap()
@@ -1499,9 +1548,8 @@ snapshot_ui!(load_keep_all_works, || {
                         .try_into()
                         .unwrap(),
                 )
-            {
-                break;
-            }
+        {
+            break;
         }
     }
     wait_for_waves_fully_loaded(&mut state, 10);
@@ -1542,10 +1590,7 @@ snapshot_ui!(load_keep_signal_remove_unavailable_works, || {
                 .join("xx_2.vcd")
                 .try_into()
                 .unwrap(),
-            LoadOptions {
-                keep_variables: true,
-                keep_unavailable: false,
-            },
+            LoadOptions::KeepAvailable,
         ),
     ];
     for message in msgs {
@@ -1554,8 +1599,8 @@ snapshot_ui!(load_keep_signal_remove_unavailable_works, || {
     loop {
         state.handle_async_messages();
         state.handle_batch_commands();
-        if let Some(waves) = &state.user.waves {
-            if waves.source
+        if let Some(waves) = &state.user.waves
+            && waves.source
                 == WaveSource::File(
                     get_project_root()
                         .unwrap()
@@ -1564,9 +1609,8 @@ snapshot_ui!(load_keep_signal_remove_unavailable_works, || {
                         .try_into()
                         .unwrap(),
                 )
-            {
-                break;
-            }
+        {
+            break;
         }
     }
     wait_for_waves_fully_loaded(&mut state, 10);
@@ -1733,6 +1777,16 @@ snapshot_ui_with_file_and_msgs! {toggle_high_value_fill, "examples/counter.vcd",
     Message::SetFillHighValues(false),
 ]}
 
+snapshot_ui_with_file_and_msgs! {dinotrace_works, "examples/counter.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["tb", "dut"]), false),
+    Message::SetDinotraceStyle(true),
+    Message::ZoomToRange { start: BigInt::from(375), end: BigInt::from(435), viewport_idx: 0 }
+]}
+
+snapshot_ui_with_file_and_msgs! {draw_events, "examples/events.vcd", [
+    Message::AddScope(ScopeRef::from_strs(&["logic"]), false),
+]}
+
 snapshot_ui_with_file_and_msgs! {direction_works, "examples/tb_recv.ghw", [
     Message::SetSidePanelVisible(true),
     Message::SetActiveScope(ScopeType::WaveScope(ScopeRef::from_strs(&["tb_recv", "dut"]))),
@@ -1761,10 +1815,7 @@ snapshot_ui!(signals_can_be_added_after_file_switch, || {
     ]));
     state.update(Message::LoadFile(
         project_root.join("examples/counter2.vcd"),
-        LoadOptions {
-            keep_variables: true,
-            keep_unavailable: false,
-        },
+        LoadOptions::KeepAvailable,
     ));
 
     loop {
@@ -1910,10 +1961,8 @@ fn handle_messages_until(
 snapshot_ui!(save_and_start_with_state, || {
     // FIXME refactor startup code so that we can test the actual code,
     // not with a separate load command like here
-    let save_file = env::temp_dir().join(format!(
-        "save_and_start_with_state.{}",
-        STATE_FILE_EXTENSION
-    ));
+    let save_file =
+        env::temp_dir().join(format!("save_and_start_with_state.{STATE_FILE_EXTENSION}"));
     let mut state = SystemState::new_default_config()
         .unwrap()
         .with_params(StartupParams {
@@ -2055,10 +2104,7 @@ snapshot_ui!(switch, || {
             .join("examples/with_1_bit.vcd")
             .try_into()
             .unwrap(),
-        LoadOptions {
-            keep_variables: true,
-            keep_unavailable: true,
-        },
+        LoadOptions::KeepAll,
     ));
 
     handle_messages_until(
@@ -2127,10 +2173,7 @@ snapshot_ui!(switch_and_switch_back, || {
             .join("examples/with_1_bit.vcd")
             .try_into()
             .unwrap(),
-        LoadOptions {
-            keep_variables: true,
-            keep_unavailable: true,
-        },
+        LoadOptions::KeepAll,
     ));
 
     handle_messages_until(
@@ -2145,10 +2188,7 @@ snapshot_ui!(switch_and_switch_back, || {
             .join("examples/with_8_bit.vcd")
             .try_into()
             .unwrap(),
-        LoadOptions {
-            keep_variables: true,
-            keep_unavailable: true,
-        },
+        LoadOptions::KeepAll,
     ));
     handle_messages_until(
         &mut state,
@@ -2160,7 +2200,7 @@ snapshot_ui!(switch_and_switch_back, || {
 });
 
 snapshot_ui!(save_and_load, || {
-    let save_file = env::temp_dir().join(format!("save_and_load.{}", STATE_FILE_EXTENSION));
+    let save_file = env::temp_dir().join(format!("save_and_load.{STATE_FILE_EXTENSION}"));
     let mut state = SystemState::new_default_config()
         .unwrap()
         .with_params(StartupParams {
@@ -2574,4 +2614,492 @@ snapshot_ui_with_file_and_msgs! {wasm_translator_works, "examples/picorv32.vcd",
         String::from("Binary"),
     ),
     Message::ExpandDrawnItem { item: DisplayedItemRef(1), levels: 1 }
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_waveform_with_4state, "examples/analog.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.clk_cnt"),
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+        VariableRef::from_hierarchy_string("top.sine_real"),
+    ]),
+
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(2),
+            field: vec![],
+        }),
+        String::from("Unsigned"),
+    ),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(3)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        8.0,
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        4.0,
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(3)),
+        2.0,
+    ),
+]}
+
+// Test interpolation with valid values on both edges (no NaN)
+snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_full, "examples/analog.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+    ]),
+
+    // Configure analog interpolated mode
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        8.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(7500),
+        end: BigInt::from(8500),
+        viewport_idx: 0
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_nan, "examples/analog.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+    ]),
+
+    // Configure analog interpolated mode
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        8.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(16300),
+        end: BigInt::from(36700),
+        viewport_idx: 0
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_nan_at_start, "examples/analog.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+    ]),
+
+    // Configure analog interpolated mode
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        8.0,
+    ),
+
+    // Zoom to viewport where X region (at 68000) is near the start
+    Message::ZoomToRange {
+        start: BigInt::from(77000),
+        end: BigInt::from(87000),
+        viewport_idx: 0
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_waveform_interpolate_at_start_range, "examples/analog.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+    ]),
+
+    // Configure analog interpolated mode
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        8.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(0),
+        end: BigInt::from(1400),
+        viewport_idx: 0
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_waveform_scroll_negative, "examples/analog.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+        VariableRef::from_hierarchy_string("top.sine_4state"),
+    ]),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::step_global()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(2)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_global()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(3)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+    Message::AddTimeLine(None),
+
+    Message::CanvasScroll { delta: Vec2 { x: 500., y: 0.}, viewport_idx: 0 }
+
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_pulses_no_aliasing1, "examples/analog_pulses.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.pulse_int"),
+        VariableRef::from_hierarchy_string("top.pulse_int"),
+    ]),
+    Message::AddTimeLine(None),
+
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(0),
+            field: vec![],
+        }),
+        String::from("Unsigned"),
+    ),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+
+    // Make it a bit taller so the analog shape is clear in the snapshot
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        16.0,
+    ),
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_pulses_interpolate_to_range, "examples/analog_pulses.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.pulse_int"),
+        VariableRef::from_hierarchy_string("top.pulse_int"),
+    ]),
+    Message::AddTimeLine(None),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_global()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        16.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(1700000),
+        end: BigInt::from(2100000),
+        viewport_idx: 0
+    },
+
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_pulses_no_aliasing2, "examples/analog_pulses.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.pulse_int"),
+        VariableRef::from_hierarchy_string("top.pulse_int"),
+    ]),
+
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(0),
+            field: vec![],
+        }),
+        String::from("Unsigned"),
+    ),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        16.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(800000),
+        end: BigInt::from(1500000),
+        viewport_idx: 0
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_pulses_4state, "examples/analog_pulses.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+    ]),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        8.0,
+    ),
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_pulses_4state_zoom, "examples/analog_pulses.vcd", [
+    Message::AddTimeLine(None),
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+    ]),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(2)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+
+    Message::SetItemSelected(VisibleItemIndex(1), true),
+    Message::SetItemSelected(VisibleItemIndex(2), true),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::CurrentSelection,
+        8.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(1300000),
+        end: BigInt::from(1300010),
+        viewport_idx: 0
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_pulses_4state_zoom2, "examples/analog_pulses.vcd", [
+    Message::AddTimeLine(None),
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+    ]),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(2)),
+        Some(crate::displayed_item::AnalogSettings::step_global()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(3)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_global()),
+    ),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(4)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        4.0,
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(2)),
+        4.0,
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(3)),
+        4.0,
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(4)),
+        4.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(1100000),
+        end: BigInt::from(2300010),
+        viewport_idx: 0
+    },
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_pulses_4state_scroll_subscale, "examples/analog_pulses.vcd", [
+    Message::AddTimeLine(None),
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+        VariableRef::from_hierarchy_string("top.pulse_reg8"),
+    ]),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_global()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        4.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(2000002),
+        end: BigInt::from(2000004),
+        viewport_idx: 0
+    },
+
+    Message::CanvasScroll { delta: Vec2 { x: -50., y: 0.}, viewport_idx: 0 }
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_waveform_negive_amplitude, "examples/analog_negative.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.sine_int_neg"),
+        VariableRef::from_hierarchy_string("top.sine_int_neg")
+    ]),
+
+    // Configure analog modes
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::step_viewport()),
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        4.0,
+    )
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_waveform_ieee_inf_nan, "examples/analog_ieee_inf_nan.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.reg32"),
+        VariableRef::from_hierarchy_string("top.reg32"),
+        VariableRef::from_hierarchy_string("top.reg64"),
+        VariableRef::from_hierarchy_string("top.reg64")
+    ]),
+    Message::AddTimeLine(None),
+    // Set IEEE 754 floating point translators
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(1),
+            field: vec![],
+        }),
+        String::from("FP: 32-bit IEEE 754"),
+    ),
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(2),
+            field: vec![],
+        }),
+        String::from("FP: 32-bit IEEE 754"),
+    ),
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(3),
+            field: vec![],
+        }),
+        String::from("FP: 64-bit IEEE 754"),
+    ),
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(4),
+            field: vec![],
+        }),
+        String::from("FP: 64-bit IEEE 754"),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::step_global()),
+    ),
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(2)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_viewport()),
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        4.0,
+    ),
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(2)),
+        4.0,
+    )
+]}
+
+snapshot_ui_with_file_and_msgs! {analog_waveform_reg1024, "examples/analog.vcd", [
+    Message::AddVariables(vec![
+        VariableRef::from_hierarchy_string("top.reg1024"),
+        VariableRef::from_hierarchy_string("top.reg1024"),
+    ]),
+    Message::AddTimeLine(None),
+
+    Message::VariableFormatChange(
+        MessageTarget::Explicit(DisplayedFieldRef {
+            item: DisplayedItemRef(1),
+            field: vec![],
+        }),
+        String::from("Unsigned"),
+    ),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        Some(crate::displayed_item::AnalogSettings::interpolated_global()),
+    ),
+
+    Message::SetAnalogSettings(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        Some(crate::displayed_item::AnalogSettings::step_global()),
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(0)),
+        8.0,
+    ),
+
+    Message::ItemHeightScalingFactorChange(
+        MessageTarget::Explicit(VisibleItemIndex(1)),
+        8.0,
+    ),
+
+    Message::ZoomToRange {
+        start: BigInt::from(0),
+        end: BigInt::from(11000),
+        viewport_idx: 0
+    },
 ]}

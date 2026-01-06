@@ -6,13 +6,14 @@ mod result;
 mod scope_ref;
 pub mod translator;
 pub mod variable_index;
+mod variable_meta;
 mod variable_ref;
 
 use derive_more::Display;
 use ecolor::Color32;
 #[cfg(feature = "wasm_plugins")]
 use extism_convert::{FromBytes, Json, ToBytes};
-use num::BigUint;
+use num::{BigUint, ToPrimitive};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -26,6 +27,7 @@ pub use crate::translator::{
     BasicTranslator, Translator, VariableNameInfo, WaveSource, translates_all_bit_types,
 };
 pub use crate::variable_index::VariableIndex;
+pub use crate::variable_meta::VariableMeta;
 pub use crate::variable_ref::VariableRef;
 
 #[cfg_attr(feature = "wasm_plugins", derive(FromBytes, ToBytes))]
@@ -33,8 +35,81 @@ pub use crate::variable_ref::VariableRef;
 #[derive(Deserialize, Serialize)]
 pub struct PluginConfig(pub HashMap<String, String>);
 
+/// Quiet NaN representing undefined (X) values in analog signals.
+pub const NAN_UNDEF: f64 = f64::from_bits(0x7FF8_0000_0000_0000_u64);
+
+/// Quiet NaN representing high-impedance (Z) values in analog signals.
+pub const NAN_HIGHIMP: f64 = f64::from_bits(0x7FF8_0000_0000_0001_u64);
+
+/// Check NaN payload to determine if it represents `HighImp`.
+#[must_use]
+pub fn is_nan_highimp(value: f64) -> bool {
+    value.to_bits() == NAN_HIGHIMP.to_bits()
+}
+
+/// Convert [`BigUint`] to f64 efficiently.
+///
+/// For values that fit in u64, uses direct conversion.
+/// For larger values, falls back to `ToPrimitive::to_f64()`.
+#[must_use]
+pub fn biguint_to_f64(v: &BigUint) -> f64 {
+    v.to_u64()
+        .map(|x| x as f64)
+        .or_else(|| v.to_f64())
+        .unwrap_or(f64::INFINITY)
+}
+
+/// Parse a translated string value into a numeric f64.
+///
+/// Uses the translator name to determine parsing strategy:
+/// - Names containing "hex" parse as hexadecimal
+/// - Names containing "bin" parse as binary
+/// - Otherwise tries decimal, with hex fallback
+///
+/// Returns `None` if the string cannot be parsed as a number.
+#[must_use]
+pub fn parse_numeric_string(s: &str, translator_name: &str) -> Option<f64> {
+    let s = s.trim();
+    let translator_lower = translator_name.to_lowercase();
+
+    if translator_lower.contains("hex") {
+        let hex_str = s
+            .strip_prefix("0x")
+            .or_else(|| s.strip_prefix("0X"))
+            .unwrap_or(s);
+        BigUint::parse_bytes(hex_str.as_bytes(), 16).map(|v| biguint_to_f64(&v))
+    } else if translator_lower.contains("bin") {
+        let bin_str = s
+            .strip_prefix("0b")
+            .or_else(|| s.strip_prefix("0B"))
+            .unwrap_or(s);
+        BigUint::parse_bytes(bin_str.as_bytes(), 2).map(|v| biguint_to_f64(&v))
+    } else {
+        if let Ok(v) = s.parse::<f64>() {
+            return Some(v);
+        }
+        // Fallback: try parsing as hex for non-decimal strings
+        BigUint::parse_bytes(s.as_bytes(), 16).map(|v| biguint_to_f64(&v))
+    }
+}
+
+/// Parse [`VariableValue`] to f64 using a conversion function.
+///
+/// Handles X/Z values by returning [`NAN_UNDEF`]/[`NAN_HIGHIMP`].
+/// For valid numeric values, applies the provided conversion function.
+#[must_use]
+pub fn parse_value_to_numeric(value: &VariableValue, to_f64: impl FnOnce(&BigUint) -> f64) -> f64 {
+    match value.parse_biguint() {
+        Ok(v) => to_f64(&v),
+        Err((_, ValueKind::HighImp)) => NAN_HIGHIMP,
+        Err((_, _)) => NAN_UNDEF,
+    }
+}
+
 /// Turn vector variable string into name and corresponding color if it
 /// includes values other than 0 and 1. If only 0 and 1, return None.
+/// Related to [`kind_for_binary_representation`], which returns only the kind.
+#[must_use]
 pub fn check_vector_variable(s: &str) -> Option<(String, ValueKind)> {
     if s.contains('x') {
         Some(("UNDEF".to_string(), ValueKind::Undef))
@@ -48,20 +123,46 @@ pub fn check_vector_variable(s: &str) -> Option<(String, ValueKind)> {
         Some(("UNDEF WEAK".to_string(), ValueKind::Undef))
     } else if s.contains('h') || s.contains('l') {
         Some(("WEAK".to_string(), ValueKind::Weak))
-    } else if s.chars().all(|c| c == '0' || c == '1') {
+    } else if s.chars().all(|c| matches!(c, '0' | '1')) {
         None
     } else {
         Some(("UNKNOWN VALUES".to_string(), ValueKind::Undef))
     }
 }
 
-/// VCD bit extension
-pub fn extend_string(val: &str, num_bits: u64) -> String {
-    if num_bits > val.len() as u64 {
-        let extra_count = num_bits - val.len() as u64;
+/// Return kind for a binary representation.
+/// Related to [`check_vector_variable`], which returns the same kinds, but also a string.
+/// For strings containing only 0 and 1, this function returns `ValueKind::Normal`.
+#[must_use]
+pub fn kind_for_binary_representation(s: &str) -> ValueKind {
+    if s.contains('x') {
+        ValueKind::Undef
+    } else if s.contains('z') {
+        ValueKind::HighImp
+    } else if s.contains('-') {
+        ValueKind::DontCare
+    } else if s.contains('u') || s.contains('w') {
+        ValueKind::Undef
+    } else if s.contains('h') || s.contains('l') {
+        ValueKind::Weak
+    } else {
+        ValueKind::Normal
+    }
+}
+
+/// VCD bit extension.
+/// This function extends the given string `val` to match `num_bits` by adding
+/// leading characters according to VCD rules:
+/// - '0' and '1' extend with '0'
+/// - 'x' extends with 'x'
+/// - 'z' extends with 'z'
+/// - other leading characters result in no extension
+#[must_use]
+pub fn extend_string(val: &str, num_bits: u32) -> String {
+    if num_bits as usize > val.len() {
+        let extra_count = num_bits as usize - val.len();
         let extra_value = match val.chars().next() {
-            Some('0') => "0",
-            Some('1') => "0",
+            Some('0' | '1') => "0",
             Some('x') => "x",
             Some('z') => "z",
             // If we got weird characters, this is probably a string, so we don't
@@ -69,13 +170,16 @@ pub fn extend_string(val: &str, num_bits: u64) -> String {
             // We may have to add extensions for std_logic values though if simulators save without extension
             _ => "",
         };
-        extra_value.repeat(extra_count as usize)
+        extra_value.repeat(extra_count)
     } else {
         String::new()
     }
 }
 
 #[derive(Debug, PartialEq, Clone, Display, Serialize, Deserialize)]
+/// The value of a variable in the waveform as obtained from the waveform source.
+///
+/// Represented either as an unsigned integer ([`BigUint`]) or as a raw [`String`] with one character per bit.
 pub enum VariableValue {
     #[display("{_0}")]
     BigUint(BigUint),
@@ -88,7 +192,7 @@ impl VariableValue {
     /// with default handling of other values.
     ///
     /// The value passed to the handler is guaranteed to only contain 0 and 1, but it is not
-    /// padded to the length of the vector, i.e. leading zeros can be missing. Use [extend_string]
+    /// padded to the length of the vector, i.e. leading zeros can be missing. Use [`extend_string`]
     /// on the result to add the padding.
     pub fn handle_bits<E>(
         self,
@@ -103,9 +207,9 @@ impl VariableValue {
                         subfields: vec![],
                         kind,
                     });
-                } else {
-                    v
                 }
+                // v contains only 0 and 1
+                v
             }
         };
 
@@ -114,6 +218,7 @@ impl VariableValue {
 }
 
 #[derive(Clone, PartialEq, Copy, Debug, Serialize, Deserialize)]
+/// The kind of a translated value, used to determine how to color it in the UI.
 pub enum ValueKind {
     Normal,
     Undef,
@@ -123,6 +228,7 @@ pub enum ValueKind {
     DontCare,
     Weak,
     Error,
+    Event,
 }
 
 #[cfg_attr(feature = "wasm_plugins", derive(FromBytes, ToBytes))]
@@ -130,11 +236,14 @@ pub enum ValueKind {
 #[derive(PartialEq, Deserialize, Serialize, Debug)]
 pub enum TranslationPreference {
     /// This translator prefers translating the variable, so it will be selected
-    /// as the default translator for the variable
+    /// as the default translator for the variable.
     Prefer,
     /// This translator is able to translate the variable, but will not be
-    /// selected by default, the user has to select it
+    /// selected by default, the user has to select it.
     Yes,
+    /// This translator is not suitable to translate the variable,
+    /// but can be selected by the user in the "Not recommended" menu.
+    /// No guarantees are made about the correctness of the translation.
     No,
 }
 
@@ -143,19 +252,27 @@ pub enum TranslationPreference {
 #[cfg_attr(feature = "wasm_plugins", encoding(Json))]
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub enum VariableInfo {
+    /// A compound variable with subfields.
     Compound {
         subfields: Vec<(String, VariableInfo)>,
     },
+    /// A flat bit-vector variable.
     Bits,
+    /// A single-bit variable.
     Bool,
+    /// A clock variable.
     Clock,
     // NOTE: only used for state saving where translators will clear this out with the actual value
     #[default]
+    /// A string variable.
     String,
+    /// A real-number variable.
     Real,
+    Event,
 }
 
 #[derive(Debug, Display, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+/// The type of variable based on information from the waveform source.
 pub enum VariableType {
     // VCD-specific types
     #[display("event")]
@@ -220,6 +337,8 @@ pub enum VariableType {
     Enum,
     #[display("shortreal")]
     ShortReal,
+    #[display("real parameter")]
+    RealParameter,
 
     // VHDL (these are the types emitted by GHDL)
     #[display("boolean")]
@@ -255,53 +374,18 @@ pub enum VariableDirection {
     Unknown,
 }
 
-#[cfg_attr(feature = "wasm_plugins", derive(FromBytes, ToBytes))]
-#[cfg_attr(feature = "wasm_plugins", encoding(Json))]
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct VariableMeta<VarId, ScopeId> {
-    pub var: VariableRef<VarId, ScopeId>,
-    pub num_bits: Option<u32>,
-    /// Type of the variable in the HDL (on a best effort basis).
-    pub variable_type: Option<VariableType>,
-    /// Type name of variable, if available
-    pub variable_type_name: Option<String>,
-    pub index: Option<VariableIndex>,
-    pub direction: Option<VariableDirection>,
-    pub enum_map: HashMap<String, String>,
-    /// Indicates how the variable is stored. A variable of "type" boolean for example
-    /// could be stored as a String or as a BitVector.
-    pub encoding: VariableEncoding,
-}
-
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
+/// Variable values can be encoded in different ways in the waveform source.
 pub enum VariableEncoding {
     String,
     Real,
     BitVector,
-}
-
-impl<VarId1, ScopeId1> VariableMeta<VarId1, ScopeId1> {
-    pub fn map_ids<VarId2, ScopeId2>(
-        self,
-        var_fn: impl FnMut(VarId1) -> VarId2,
-        scope_fn: impl FnMut(ScopeId1) -> ScopeId2,
-    ) -> VariableMeta<VarId2, ScopeId2> {
-        VariableMeta {
-            var: self.var.map_ids(var_fn, scope_fn),
-            num_bits: self.num_bits,
-            variable_type: self.variable_type,
-            index: self.index,
-            direction: self.direction,
-            enum_map: self.enum_map,
-            encoding: self.encoding,
-            variable_type_name: self.variable_type_name,
-        }
-    }
+    Event,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ValueKind, check_vector_variable, extend_string};
+    use super::{ValueKind, check_vector_variable, extend_string, parse_numeric_string};
 
     #[test]
     fn binary_only_returns_none() {
@@ -419,5 +503,88 @@ mod tests {
 
         // Empty input yields empty extension as there is no leading char to guide
         assert_eq!(extend_string("", 5), "");
+    }
+
+    // ---------------- parse_numeric_string tests ----------------
+
+    #[test]
+    fn parse_numeric_string_hex() {
+        assert_eq!(parse_numeric_string("f9", "Hex"), Some(249.0));
+        assert_eq!(parse_numeric_string("ca", "Hexadecimal"), Some(202.0));
+        assert_eq!(parse_numeric_string("80", "Hex"), Some(128.0));
+        assert_eq!(parse_numeric_string("10", "Hex"), Some(16.0));
+        assert_eq!(parse_numeric_string("0x10", "Hex"), Some(16.0));
+        assert_eq!(parse_numeric_string("0xFF", "Hexadecimal"), Some(255.0));
+    }
+
+    #[test]
+    fn parse_numeric_string_decimal() {
+        assert_eq!(parse_numeric_string("123", "Unsigned"), Some(123.0));
+        assert_eq!(parse_numeric_string("123.45", "Float"), Some(123.45));
+        assert_eq!(parse_numeric_string("80", "Unsigned"), Some(80.0));
+        assert_eq!(parse_numeric_string("10", "Signed"), Some(10.0));
+        assert_eq!(parse_numeric_string("1.5e3", "Float"), Some(1500.0));
+        assert_eq!(parse_numeric_string("-3.14e-2", "Float"), Some(-0.0314));
+    }
+
+    #[test]
+    fn parse_numeric_string_binary() {
+        assert_eq!(parse_numeric_string("1010", "Binary"), Some(10.0));
+        assert_eq!(parse_numeric_string("0b1010", "Binary"), Some(10.0));
+        assert_eq!(parse_numeric_string("11111111", "Bin"), Some(255.0));
+    }
+
+    #[test]
+    fn parse_numeric_string_fallback_to_hex() {
+        // Fallback to hex for non-decimal strings
+        assert_eq!(parse_numeric_string("f9", "Unsigned"), Some(249.0));
+        assert_eq!(parse_numeric_string("ca", "Signed"), Some(202.0));
+    }
+
+    #[test]
+    fn parse_numeric_string_invalid() {
+        assert_eq!(parse_numeric_string("xyz", "Hex"), None);
+        assert_eq!(parse_numeric_string("invalid", "Unsigned"), None);
+        assert_eq!(parse_numeric_string("12", "Binary"), None);
+    }
+
+    #[test]
+    fn parse_numeric_string_large_values() {
+        // 128-bit max value in hex: 2^128 - 1 = 340282366920938463463374607431768211455
+        let hex_128bit = "ffffffffffffffffffffffffffffffff";
+        assert_eq!(
+            parse_numeric_string(hex_128bit, "Hexadecimal"),
+            Some(3.402823669209385e38)
+        );
+
+        // 256-bit max value in hex: 2^256 - 1
+        let hex_256bit = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        assert_eq!(
+            parse_numeric_string(hex_256bit, "Hex"),
+            Some(1.157920892373162e77)
+        );
+
+        // Large binary value (128 bits): same as hex_128bit
+        let bin_128bit = "1111111111111111111111111111111111111111111111111111111111111111\
+                          1111111111111111111111111111111111111111111111111111111111111111";
+        assert_eq!(
+            parse_numeric_string(bin_128bit, "Binary"),
+            Some(3.402823669209385e38)
+        );
+
+        // 64-bit max value in hex: 2^64 - 1 = 18446744073709551615
+        let hex_64bit = "ffffffffffffffff";
+        assert_eq!(
+            parse_numeric_string(hex_64bit, "Hexadecimal"),
+            Some(1.8446744073709552e19)
+        );
+
+        // Hex and Unsigned should produce same result for same numeric value
+        // 128-bit value as decimal string (from Unsigned translator)
+        let decimal_128bit = "340282366920938463463374607431768211455";
+        assert_eq!(
+            parse_numeric_string(decimal_128bit, "Unsigned"),
+            Some(3.402823669209385e38)
+        );
     }
 }

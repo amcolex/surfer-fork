@@ -7,7 +7,7 @@ use std::{
 use crate::{
     CanvasState, StartupParams,
     clock_highlighting::ClockHighlightType,
-    config::{ArrowKeyBindings, AutoLoad, PrimaryMouseDrag, SurferConfig},
+    config::{ArrowKeyBindings, AutoLoad, PrimaryMouseDrag, SurferConfig, TransitionValue},
     data_container::DataContainer,
     dialog::{OpenSiblingStateFileDialog, ReloadWaveformDialog},
     displayed_item_tree::{DisplayedItemTree, VisibleItemIndex},
@@ -26,9 +26,11 @@ use egui::{
     CornerRadius, Stroke, Visuals,
     style::{Selection, WidgetVisuals, Widgets},
 };
+use eyre::{Context, Result};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use surfer_translation_types::Translator;
+use surver::SurverFileInfo;
 use tracing::{error, info, trace, warn};
 
 /// The parts of the program state that need to be serialized when loading/saving state
@@ -109,6 +111,18 @@ pub struct UserState {
     pub(crate) ui_zoom_factor: Option<f32>,
     #[serde(default)]
     pub(crate) animation_enabled: Option<bool>,
+    #[serde(default)]
+    pub(crate) use_dinotrace_style: Option<bool>,
+    #[serde(skip, default)]
+    pub(crate) show_server_file_window: bool,
+    #[serde(skip, default)]
+    pub(crate) selected_server_file_index: Option<usize>,
+    #[serde(skip, default)]
+    pub(crate) surver_file_infos: Option<Vec<SurverFileInfo>>,
+    #[serde(skip, default)]
+    pub(crate) surver_url: Option<String>,
+    #[serde(default)]
+    pub(crate) transition_value: Option<TransitionValue>,
 
     // Path of last saved-to state file
     // Do not serialize as this causes a few issues and doesn't help:
@@ -127,6 +141,80 @@ impl std::fmt::Debug for UserState {
     }
 }
 
+impl UserState {
+    pub fn new(force_default_config: bool) -> Result<UserState> {
+        let config = SurferConfig::new(force_default_config)
+            .with_context(|| "Failed to load config file")?;
+        Ok(UserState {
+            config,
+            ..Default::default()
+        })
+    }
+}
+
+impl Default for UserState {
+    fn default() -> Self {
+        Self {
+            config: SurferConfig::default(),
+            show_hierarchy: None,
+            show_menu: None,
+            show_ticks: None,
+            show_toolbar: None,
+            show_tooltip: None,
+            show_scope_tooltip: None,
+            show_default_timeline: None,
+            show_overview: None,
+            show_statusbar: None,
+            align_names_right: None,
+            show_variable_indices: None,
+            show_variable_direction: None,
+            show_empty_scopes: None,
+            show_parameters_in_scopes: None,
+            parameter_display_location: None,
+            highlight_focused: None,
+            fill_high_values: None,
+            primary_button_drag_behavior: None,
+            arrow_key_bindings: None,
+            clock_highlight_type: None,
+            hierarchy_style: None,
+            autoload_sibling_state_files: None,
+            autoreload_files: None,
+            waves: None,
+            drag_started: false,
+            drag_source_idx: None,
+            drag_target_idx: None,
+            previous_waves: None,
+            count: None,
+            blacklisted_translators: HashSet::new(),
+            show_about: false,
+            show_keys: false,
+            show_gestures: false,
+            show_quick_start: false,
+            show_license: false,
+            show_performance: false,
+            show_logs: false,
+            show_cursor_window: false,
+            wanted_timeunit: TimeUnit::None,
+            time_string_format: None,
+            show_url_entry: false,
+            show_reload_suggestion: None,
+            show_open_sibling_state_file_suggestion: None,
+            variable_name_filter_focused: false,
+            variable_filter: VariableFilter::new(),
+            sidepanel_width: None,
+            ui_zoom_factor: None,
+            state_file: None,
+            animation_enabled: None,
+            use_dinotrace_style: None,
+            selected_server_file_index: None,
+            show_server_file_window: false,
+            surver_file_infos: None,
+            surver_url: None,
+            transition_value: None,
+        }
+    }
+}
+
 impl SystemState {
     pub fn with_params(mut self, args: StartupParams) -> Self {
         self.user.previous_waves = self.user.waves;
@@ -135,16 +223,12 @@ impl SystemState {
         // we turn the waveform argument and any startup command file into batch commands
         self.batch_messages = VecDeque::new();
 
-        let load_options = LoadOptions {
-            keep_variables: true,
-            keep_unavailable: true,
-        };
         match args.waves {
             Some(WaveSource::Url(url)) => {
-                self.add_batch_message(Message::LoadWaveformFileFromUrl(url, load_options));
+                self.add_batch_message(Message::LoadWaveformFileFromUrl(url, LoadOptions::KeepAll));
             }
             Some(WaveSource::File(file)) => {
-                self.add_batch_message(Message::LoadFile(file, load_options));
+                self.add_batch_message(Message::LoadFile(file, LoadOptions::KeepAll));
             }
             Some(WaveSource::Data) => error!("Attempted to load data at startup"),
             Some(WaveSource::Cxxrtl(url)) => {
@@ -213,14 +297,14 @@ impl SystemState {
         }
 
         let ((new_wave, load_commands), is_reload) =
-            if load_options.keep_variables && self.user.waves.is_some() {
+            if load_options != LoadOptions::Clear && self.user.waves.is_some() {
                 (
                     self.user.waves.take().unwrap().update_with_waves(
                         new_waves,
                         filename,
                         format,
                         &self.translators,
-                        load_options.keep_unavailable,
+                        load_options == LoadOptions::KeepAll,
                     ),
                     true,
                 )
@@ -231,7 +315,7 @@ impl SystemState {
                         filename,
                         format,
                         &self.translators,
-                        load_options.keep_unavailable,
+                        load_options == LoadOptions::KeepAll,
                     ),
                     true,
                 )
@@ -259,6 +343,8 @@ impl SystemState {
                             display_item_ref_counter: 0,
                             old_num_timestamps: None,
                             graphics: HashMap::new(),
+                            cache_generation: 0,
+                            inflight_caches: HashMap::new(),
                         },
                         None,
                     ),
@@ -316,6 +402,8 @@ impl SystemState {
             display_item_ref_counter: 0,
             old_num_timestamps: None,
             graphics: HashMap::new(),
+            cache_generation: 0,
+            inflight_caches: HashMap::new(),
         };
 
         self.invalidate_draw_commands();
@@ -325,6 +413,7 @@ impl SystemState {
         self.user.waves = Some(new_transaction_streams);
     }
 
+    #[cfg(test)]
     pub(crate) fn handle_async_messages(&mut self) {
         let mut msgs = vec![];
         loop {
@@ -340,6 +429,19 @@ impl SystemState {
 
         while let Some(msg) = msgs.pop() {
             self.update(msg);
+        }
+    }
+
+    pub(crate) fn push_async_messages(&mut self, msgs: &mut Vec<Message>) {
+        loop {
+            match self.channels.msg_receiver.try_recv() {
+                Ok(msg) => msgs.push(msg),
+                Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    trace!("Message sender disconnected");
+                    break;
+                }
+            }
         }
     }
 
@@ -413,7 +515,7 @@ impl SystemState {
         };
         if let Some(load_commands) = load_commands {
             self.load_variables(load_commands);
-        };
+        }
 
         // reset drag to avoid confusion
         self.user.drag_started = false;
@@ -441,6 +543,14 @@ impl SystemState {
             .waves
             .as_ref()
             .is_some_and(|w| w.inner.is_fully_loaded())
+    }
+
+    /// Returns true if no analog caches are currently being built
+    pub fn analog_caches_ready(&self) -> bool {
+        self.user
+            .waves
+            .as_ref()
+            .is_none_or(|w| w.inflight_caches.is_empty())
     }
 
     /// Returns the current canvas state
@@ -513,7 +623,7 @@ impl SystemState {
             match server {
                 Ok(mut server) => server.run().await,
                 Err(m) => {
-                    error!("Could not start WCP server. {m:?}")
+                    error!("Could not start WCP server. {m:?}");
                 }
             }
         }));

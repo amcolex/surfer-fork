@@ -27,12 +27,12 @@ type RestCommand = Box<dyn Fn(&str) -> Option<Command<Message>>>;
 
 /// Match str with wave file extensions, currently: vcd, fst, ghw
 fn is_wave_file_extension(ext: &str) -> bool {
-    ext == "vcd" || ext == "fst" || ext == "ghw"
+    matches!(ext, "vcd" | "fst" | "ghw")
 }
 
 /// Match str with command file extensions, currently: sucl
 fn is_command_file_extension(ext: &str) -> bool {
-    ext == "sucl"
+    matches!(ext, "sucl")
 }
 
 /// Split part of a query at whitespace
@@ -40,7 +40,7 @@ fn is_command_file_extension(ext: &str) -> bool {
 /// fzcmd splits at regex "words" which does not include special characters
 /// like '#'. This function can be used instead via `ParamGreed::Custom(&separate_at_space)`
 fn separate_at_space(query: &str) -> (String, String, String, String) {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"(\s*)(\S*)(\s?)(.*)"#).unwrap());
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(\s*)(\S*)(\s?)(.*)").unwrap());
 
     let captures = RE.captures_iter(query).next().unwrap();
 
@@ -94,6 +94,16 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
         Some(v) => v.inner.variable_names(),
         None => vec![],
     };
+    let surver_file_names = state
+        .user
+        .surver_file_infos
+        .as_ref()
+        .map_or(vec![], |file_infos| {
+            file_infos
+                .iter()
+                .map(|info| info.filename.clone())
+                .collect()
+        });
     let displayed_items = match &state.user.waves {
         Some(v) => v
             .items_tree
@@ -227,7 +237,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
     let _ = wcp_start_or_stop;
 
     let keep_during_reload = state.user.config.behavior.keep_during_reload;
-    let commands = if state.user.waves.is_some() {
+    let mut commands = if state.user.waves.is_some() {
         vec![
             "load_file",
             "load_url",
@@ -342,6 +352,11 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
             "exit",
         ]
     };
+    if !surver_file_names.is_empty() {
+        commands.push("surver_select_file");
+        commands.push("surver_switch_file");
+    }
+
     let mut theme_names = state.user.config.theme.theme_names.clone();
     let state_file = state.user.state_file.clone();
     let show_hierarchy = state.show_hierarchy();
@@ -363,7 +378,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                     Box::new(|word| {
                         Some(Command::Terminal(Message::LoadFile(
                             word.into(),
-                            LoadOptions::clean(),
+                            LoadOptions::Clear,
                         )))
                     }),
                 ),
@@ -372,10 +387,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                     Box::new(|word| {
                         Some(Command::Terminal(Message::LoadFile(
                             word.into(),
-                            LoadOptions {
-                                keep_variables: true,
-                                keep_unavailable: false,
-                            },
+                            LoadOptions::KeepAll,
                         )))
                     }),
                 ),
@@ -385,7 +397,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                     Box::new(|query, _| {
                         Some(Command::Terminal(Message::LoadWaveformFileFromUrl(
                             query.to_string(),
-                            LoadOptions::clean(), // load_url does not indicate any format restrictions
+                            LoadOptions::Clear, // load_url does not indicate any format restrictions
                         )))
                     }),
                 )),
@@ -508,6 +520,24 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                     keep_during_reload,
                 ))),
                 "remove_unavailable" => Some(Command::Terminal(Message::RemovePlaceholders)),
+                "surver_select_file" => single_word(
+                    surver_file_names.clone(),
+                    Box::new(|word| {
+                        Some(Command::Terminal(Message::LoadSurverFileByName(
+                            word.to_string(),
+                            LoadOptions::Clear,
+                        )))
+                    }),
+                ),
+                "surver_switch_file" => single_word(
+                    surver_file_names.clone(),
+                    Box::new(|word| {
+                        Some(Command::Terminal(Message::LoadSurverFileByName(
+                            word.to_string(),
+                            LoadOptions::KeepAll,
+                        )))
+                    }),
+                ),
                 // Variable commands
                 "variable_add" | "generator_add" => {
                     if is_transaction_container {
@@ -624,7 +654,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                     Box::new(|word| {
                         // split off the idx which is always followed by an underscore
                         let alpha_idx: String = word.chars().take_while(|c| *c != '_').collect();
-                        alpha_idx_to_uint_idx(alpha_idx)
+                        alpha_idx_to_uint_idx(&alpha_idx)
                             .map(|idx| Command::Terminal(Message::FocusItem(idx)))
                     }),
                 ),
@@ -633,7 +663,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                     Box::new(|word| {
                         // split off the idx which is always followed by an underscore
                         let alpha_idx: String = word.chars().take_while(|c| *c != '_').collect();
-                        alpha_idx_to_uint_idx(alpha_idx).map(|idx| {
+                        alpha_idx_to_uint_idx(&alpha_idx).map(|idx| {
                             Command::Terminal(Message::MoveCursorToTransition {
                                 next: true,
                                 variable: Some(idx),
@@ -647,7 +677,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                     Box::new(|word| {
                         // split off the idx which is always followed by an underscore
                         let alpha_idx: String = word.chars().take_while(|c| *c != '_').collect();
-                        alpha_idx_to_uint_idx(alpha_idx).map(|idx| {
+                        alpha_idx_to_uint_idx(&alpha_idx).map(|idx| {
                             Command::Terminal(Message::MoveCursorToTransition {
                                 next: false,
                                 variable: Some(idx),
@@ -667,7 +697,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                     Box::new(|word| {
                         // split off the idx which is always followed by an underscore
                         let alpha_idx: String = word.chars().take_while(|c| *c != '_').collect();
-                        alpha_idx_to_uint_idx(alpha_idx).map(|idx| {
+                        alpha_idx_to_uint_idx(&alpha_idx).map(|idx| {
                             Command::Terminal(Message::VariableValueToClipbord(
                                 MessageTarget::Explicit(idx),
                             ))
@@ -677,7 +707,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
                 "preference_set_clock_highlight" => single_word(
                     ["Line", "Cycle", "None"]
                         .iter()
-                        .map(std::string::ToString::to_string)
+                        .map(ToString::to_string)
                         .collect_vec(),
                     Box::new(|word| {
                         Some(Command::Terminal(Message::SetClockHighlightType(

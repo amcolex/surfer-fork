@@ -17,6 +17,7 @@ variable_highimp = "c9e124"
 variable_dontcare = "4040ff"
 variable_weak = "808080"
 variable_parameter = "d4d4d4"
+variable_event = "97cdf4"
 transaction_default = "56c126"
 waveform_opacity = 0.2
 wide_opacity = 0.0
@@ -24,6 +25,7 @@ cursor = { color = "b63935", width=2 }
 gesture = { color = "e9da16", width = 2 }
 measure = { color = "808080", width = 2 }
 linewidth = 2
+thick_linewidth = 4
 vector_transition_width = 6
 alt_frequency = 3
 viewport_separator = { color="d4d4d4", width=4 }

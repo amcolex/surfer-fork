@@ -1,7 +1,7 @@
-use eyre::{Context, Result};
+use eyre::Result;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::{Arc, atomic::AtomicBool},
 };
 use tokio::task::JoinHandle;
@@ -11,15 +11,12 @@ use surfer_translation_types::translator::VariableNameInfo;
 
 use crate::{
     CachedDrawData, CanvasState, Channels, WcpClientCapabilities, command_prompt,
-    config::SurferConfig,
     displayed_item::DisplayedItemRef,
     message::Message,
     state::UserState,
-    time::TimeUnit,
     translation::{TranslatorList, all_translators},
-    variable_filter::VariableFilter,
     wave_container::{ScopeRef, VariableRef},
-    wave_source::LoadProgress,
+    wave_source::{LoadOptions, LoadProgress},
 };
 
 #[cfg(feature = "performance_plot")]
@@ -73,6 +70,8 @@ pub struct SystemState {
     pub(crate) url: RefCell<String>,
     pub(crate) command_prompt_text: RefCell<String>,
     pub(crate) last_canvas_rect: RefCell<Option<Rect>>,
+    pub(crate) surver_selected_file: RefCell<Option<usize>>,
+    pub(crate) surver_load_options: RefCell<LoadOptions>,
 
     /// These items should be expanded into subfields in the next frame. Cleared after each
     /// frame
@@ -112,66 +111,13 @@ impl SystemState {
     }
 
     fn new_inner(force_default_config: bool) -> Result<SystemState> {
-        let config = SurferConfig::new(force_default_config)
-            .with_context(|| "Failed to load config file")?;
         let channels = Channels::new();
 
         // Basic translators that we can load quickly
         let translators = all_translators();
 
         let result = SystemState {
-            user: UserState {
-                config,
-                waves: None,
-                previous_waves: None,
-                count: None,
-                blacklisted_translators: HashSet::new(),
-                show_about: false,
-                show_keys: false,
-                show_gestures: false,
-                show_performance: false,
-                show_license: false,
-                show_logs: false,
-                show_cursor_window: false,
-                wanted_timeunit: TimeUnit::None,
-                time_string_format: None,
-                show_url_entry: false,
-                show_quick_start: false,
-                show_reload_suggestion: None,
-                variable_name_filter_focused: false,
-                variable_filter: VariableFilter::new(),
-                ui_zoom_factor: None,
-                state_file: None,
-                show_hierarchy: None,
-                show_menu: None,
-                show_ticks: None,
-                show_toolbar: None,
-                show_tooltip: None,
-                show_scope_tooltip: None,
-                show_default_timeline: None,
-                show_overview: None,
-                show_statusbar: None,
-                show_variable_direction: None,
-                show_open_sibling_state_file_suggestion: None,
-                align_names_right: None,
-                show_variable_indices: None,
-                show_empty_scopes: None,
-                show_parameters_in_scopes: None,
-                parameter_display_location: None,
-                highlight_focused: None,
-                fill_high_values: None,
-                drag_started: false,
-                drag_source_idx: None,
-                drag_target_idx: None,
-                sidepanel_width: None,
-                primary_button_drag_behavior: None,
-                arrow_key_bindings: None,
-                clock_highlight_type: None,
-                hierarchy_style: None,
-                autoload_sibling_state_files: None,
-                autoreload_files: None,
-                animation_enabled: None,
-            },
+            user: UserState::new(force_default_config)?,
             translators,
             channels,
             progress_tracker: None,
@@ -196,6 +142,8 @@ impl SystemState {
             items_to_expand: RefCell::new(vec![]),
             char_to_add_to_prompt: RefCell::new(None),
             scope_ref_to_expand: RefCell::new(None),
+            surver_selected_file: RefCell::new(None),
+            surver_load_options: RefCell::new(LoadOptions::Clear),
             expand_parameter_section: false,
 
             url_callback: None,

@@ -4,14 +4,14 @@ use egui_extras::{Column, TableBuilder};
 use emath::{Align2, Pos2, Rect, Vec2};
 use epaint::{CornerRadius, FontId, Stroke};
 use itertools::Itertools;
-use num::BigInt;
+use num::{BigInt, One};
 
 use crate::SystemState;
 use crate::{
     config::SurferTheme,
     displayed_item::{DisplayedItem, DisplayedItemRef, DisplayedMarker},
     message::Message,
-    time::time_string,
+    time::TimeFormatter,
     view::{DrawingContext, ItemDrawingInfo},
     viewport::Viewport,
     wave_data::WaveData,
@@ -24,7 +24,7 @@ const CURSOR_MARKER_IDX: u8 = 255;
 
 impl WaveData {
     /// Get the color for a marker by its index, falling back to cursor color if not found
-    fn get_marker_color<'a>(&self, idx: u8, theme: &'a SurferTheme) -> &'a Color32 {
+    fn get_marker_color(&self, idx: u8, theme: &SurferTheme) -> Color32 {
         self.items_tree
             .iter()
             .find_map(|node| {
@@ -39,18 +39,7 @@ impl WaveData {
                 }
                 None
             })
-            .unwrap_or(&theme.cursor.color)
-    }
-
-    /// Draw a vertical line at the given x position with the specified stroke
-    fn draw_vertical_line(&self, x: f32, ctx: &mut DrawingContext, size: Vec2, stroke: &Stroke) {
-        ctx.painter.line_segment(
-            [
-                (ctx.to_screen)(x + 0.5, -0.5),
-                (ctx.to_screen)(x + 0.5, size.y),
-            ],
-            *stroke,
-        );
+            .unwrap_or(theme.cursor.color)
     }
 
     pub fn draw_cursor(
@@ -61,9 +50,9 @@ impl WaveData {
         viewport: &Viewport,
     ) {
         if let Some(marker) = &self.cursor {
-            let num_timestamps = self.num_timestamps().unwrap_or(1.into());
+            let num_timestamps = self.num_timestamps().unwrap_or_else(BigInt::one);
             let x = viewport.pixel_from_time(marker, size.x, &num_timestamps);
-            self.draw_vertical_line(x, ctx, size, &theme.cursor.clone().into());
+            draw_vertical_line(x, ctx, size, theme.cursor.clone().into());
         }
     }
 
@@ -74,18 +63,19 @@ impl WaveData {
         size: Vec2,
         viewport: &Viewport,
     ) {
-        let num_timestamps = self.num_timestamps().unwrap_or(1.into());
+        let num_timestamps = self.num_timestamps().unwrap_or_else(BigInt::one);
         for (idx, marker) in &self.markers {
             let color = self.get_marker_color(*idx, theme);
             let stroke = Stroke {
-                color: *color,
+                color,
                 width: theme.cursor.width,
             };
             let x = viewport.pixel_from_time(marker, size.x, &num_timestamps);
-            self.draw_vertical_line(x, ctx, size, &stroke);
+            draw_vertical_line(x, ctx, size, stroke);
         }
     }
 
+    #[must_use]
     pub fn can_add_marker(&self) -> bool {
         self.markers.len() < MAX_MARKERS
     }
@@ -155,7 +145,7 @@ impl WaveData {
     pub fn move_marker_to_cursor(&mut self, idx: u8) {
         if let Some(location) = self.cursor.clone() {
             self.set_marker_position(idx, &location);
-        };
+        }
     }
 
     /// Draw text with background box at the specified position
@@ -165,9 +155,9 @@ impl WaveData {
         ctx: &mut DrawingContext,
         x: f32,
         y: f32,
-        text: String,
+        text: &str,
         text_size: f32,
-        background_color: &Color32,
+        background_color: Color32,
         foreground_color: Color32,
         padding: f32,
     ) {
@@ -175,7 +165,7 @@ impl WaveData {
         let rect = ctx.painter.text(
             (ctx.to_screen)(x, y),
             Align2::CENTER_CENTER,
-            text.clone(),
+            text,
             FontId::proportional(text_size),
             foreground_color,
         );
@@ -184,11 +174,8 @@ impl WaveData {
         let min = Pos2::new(rect.min.x - padding, rect.min.y - padding);
         let max = Pos2::new(rect.max.x + padding, rect.max.y + padding);
 
-        ctx.painter.rect_filled(
-            Rect { min, max },
-            CornerRadius::default(),
-            *background_color,
-        );
+        ctx.painter
+            .rect_filled(Rect { min, max }, CornerRadius::default(), background_color);
 
         // Draw text on top of background
         ctx.painter.text(
@@ -228,7 +215,7 @@ impl WaveData {
                 ctx,
                 x,
                 size.y * 0.5,
-                idx_string,
+                &idx_string,
                 text_size,
                 background_color,
                 theme.foreground,
@@ -239,15 +226,6 @@ impl WaveData {
 }
 
 impl SystemState {
-    /// Generate the message for a marker click based on its index
-    fn marker_click_message(marker_idx: u8, cursor: &Option<BigInt>) -> Message {
-        if marker_idx < CURSOR_MARKER_IDX {
-            Message::GoToMarkerPosition(marker_idx, 0)
-        } else {
-            Message::GoToTime(cursor.clone(), 0)
-        }
-    }
-
     pub fn draw_marker_window(&self, waves: &WaveData, ctx: &Context, msgs: &mut Vec<Message>) {
         let mut open = true;
 
@@ -303,32 +281,33 @@ impl SystemState {
                             for (marker_idx, _, widget_text) in &markers {
                                 header.col(|ui| {
                                     if ui.label(widget_text.clone()).clicked() {
-                                        msgs.push(Self::marker_click_message(
+                                        msgs.push(marker_click_message(
                                             *marker_idx,
-                                            &waves.cursor,
+                                            waves.cursor.as_ref(),
                                         ));
                                     }
                                 });
                             }
                         })
                         .body(|mut body| {
+                            let time_formatter = TimeFormatter::new(
+                                &waves.inner.metadata().timescale,
+                                &self.user.wanted_timeunit,
+                                &self.get_time_format(),
+                            );
                             for (marker_idx, row_marker_time, row_widget_text) in &markers {
                                 body.row(row_height, |mut row| {
                                     row.col(|ui| {
                                         if ui.label(row_widget_text.clone()).clicked() {
-                                            msgs.push(Self::marker_click_message(
+                                            msgs.push(marker_click_message(
                                                 *marker_idx,
-                                                &waves.cursor,
+                                                waves.cursor.as_ref(),
                                             ));
                                         }
                                     });
                                     for (_, col_marker_time, _) in &markers {
-                                        let diff = time_string(
-                                            &(*row_marker_time - *col_marker_time),
-                                            &waves.inner.metadata().timescale,
-                                            &self.user.wanted_timeunit,
-                                            &self.get_time_format(),
-                                        );
+                                        let diff = time_formatter
+                                            .format(&(*row_marker_time - *col_marker_time));
                                         row.col(|ui| {
                                             ui.label(diff);
                                         });
@@ -358,6 +337,11 @@ impl SystemState {
     ) {
         let text_size = ctx.cfg.text_size;
 
+        let time_formatter = TimeFormatter::new(
+            &waves.inner.metadata().timescale,
+            &self.user.wanted_timeunit,
+            &self.get_time_format(),
+        );
         for drawing_info in waves.drawing_infos.iter().filter_map(|item| match item {
             ItemDrawingInfo::Marker(marker) => Some(marker),
             _ => None,
@@ -381,17 +365,14 @@ impl SystemState {
             let x = waves.numbered_marker_location(drawing_info.idx, viewport, view_width);
 
             // Time string
-            let time = time_string(
+            let time = time_formatter.format(
                 waves
                     .markers
                     .get(&drawing_info.idx)
                     .unwrap_or(&BigInt::from(0)),
-                &waves.inner.metadata().timescale,
-                &self.user.wanted_timeunit,
-                &self.get_time_format(),
             );
 
-            let text_color = *self.user.config.theme.get_best_text_color(background_color);
+            let text_color = self.user.config.theme.get_best_text_color(background_color);
 
             // Create galley
             let galley =
@@ -403,11 +384,8 @@ impl SystemState {
             let min = (ctx.to_screen)(x - offset_width, y_offset - gap);
             let max = (ctx.to_screen)(x + offset_width, y_bottom + gap);
 
-            ctx.painter.rect_filled(
-                Rect { min, max },
-                CornerRadius::default(),
-                *background_color,
-            );
+            ctx.painter
+                .rect_filled(Rect { min, max }, CornerRadius::default(), background_color);
 
             // Draw actual text on top of rectangle
             ctx.painter.galley(
@@ -423,8 +401,28 @@ impl SystemState {
 }
 
 /// Get the background color for a marker or cursor, with fallback to theme cursor color
-fn get_marker_background_color<'a>(item: &DisplayedItem, theme: &'a SurferTheme) -> &'a Color32 {
+fn get_marker_background_color(item: &DisplayedItem, theme: &SurferTheme) -> Color32 {
     item.color()
         .and_then(|color| theme.get_color(color))
-        .unwrap_or(&theme.cursor.color)
+        .unwrap_or(theme.cursor.color)
+}
+
+/// Draw a vertical line at the given x position with the specified stroke
+fn draw_vertical_line(x: f32, ctx: &mut DrawingContext, size: Vec2, stroke: Stroke) {
+    ctx.painter.line_segment(
+        [
+            (ctx.to_screen)(x + 0.5, -0.5),
+            (ctx.to_screen)(x + 0.5, size.y),
+        ],
+        stroke,
+    );
+}
+
+/// Generate the message for a marker click based on its index
+fn marker_click_message(marker_idx: u8, cursor: Option<&BigInt>) -> Message {
+    if marker_idx < CURSOR_MARKER_IDX {
+        Message::GoToMarkerPosition(marker_idx, 0)
+    } else {
+        Message::GoToTime(cursor.cloned(), 0)
+    }
 }

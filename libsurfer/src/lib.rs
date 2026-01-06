@@ -1,5 +1,7 @@
 #![deny(unused_crate_dependencies)]
 
+pub mod analog_renderer;
+pub mod analog_signal_cache;
 pub mod async_util;
 pub mod batch_commands;
 #[cfg(feature = "performance_plot")]
@@ -30,6 +32,7 @@ pub mod message;
 pub mod mousegestures;
 pub mod overview;
 pub mod remote;
+pub mod server_file_window;
 pub mod state;
 pub mod state_file_io;
 pub mod state_util;
@@ -47,8 +50,8 @@ pub mod util;
 pub mod variable_direction;
 pub mod variable_filter;
 mod variable_index;
+pub mod variable_meta;
 pub mod variable_name_type;
-pub mod variable_type;
 pub mod view;
 pub mod viewport;
 #[cfg(target_arch = "wasm32")]
@@ -64,10 +67,12 @@ pub mod wellen;
 use crate::config::AutoLoad;
 use crate::displayed_item_tree::ItemIndex;
 use crate::displayed_item_tree::TargetPosition;
+use crate::remote::get_time_table_from_server;
+use crate::variable_name_type::VariableNameType;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, LazyLock, RwLock};
 
 use batch_commands::read_command_bytes;
 use batch_commands::read_command_file;
@@ -83,11 +88,11 @@ use eyre::Result;
 use ftr_parser::types::Transaction;
 use futures::executor::block_on;
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use message::MessageTarget;
 use num::BigInt;
 use serde::Deserialize;
 use surfer_translation_types::Translator;
+use surfer_wcp::{WcpCSMessage, WcpEvent, WcpSCMessage};
 pub use system_state::SystemState;
 #[cfg(target_arch = "wasm32")]
 use tokio_stream as _;
@@ -95,13 +100,14 @@ use tracing::{error, info, warn};
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use translation::wasm_translator::PluginTranslator;
 use wave_container::ScopeRef;
-use wcp::{proto::WcpCSMessage, proto::WcpEvent, proto::WcpSCMessage};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "wasm_plugins"))]
 use crate::async_util::perform_work;
 use crate::config::{SurferConfig, SurferTheme};
 use crate::dialog::{OpenSiblingStateFileDialog, ReloadWaveformDialog};
-use crate::displayed_item::{DisplayedFieldRef, DisplayedItem, DisplayedItemRef, FieldFormat};
+use crate::displayed_item::{
+    AnalogVarState, DisplayedFieldRef, DisplayedItem, DisplayedItemRef, FieldFormat,
+};
 use crate::displayed_item_tree::VisibleItemIndex;
 use crate::drawing_canvas::TxDrawingCommands;
 use crate::message::Message;
@@ -124,15 +130,16 @@ use crate::wellen::{HeaderResult, convert_format};
 /// things until program exit
 pub(crate) static OUTSTANDING_TRANSACTIONS: AtomicUsize = AtomicUsize::new(0);
 
-lazy_static! {
-    pub static ref EGUI_CONTEXT: RwLock<Option<Arc<egui::Context>>> = RwLock::new(None);
-}
+pub static EGUI_CONTEXT: LazyLock<RwLock<Option<Arc<egui::Context>>>> =
+    LazyLock::new(|| RwLock::new(None));
 
 #[cfg(target_arch = "wasm32")]
-lazy_static! {
-    pub(crate) static ref WCP_CS_HANDLER: IngressHandler<WcpCSMessage> = IngressHandler::new();
-    pub(crate) static ref WCP_SC_HANDLER: GlobalChannelTx<WcpSCMessage> = GlobalChannelTx::new();
-}
+pub(crate) static WCP_CS_HANDLER: LazyLock<IngressHandler<WcpCSMessage>> =
+    LazyLock::new(IngressHandler::new);
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) static WCP_SC_HANDLER: LazyLock<GlobalChannelTx<WcpSCMessage>> =
+    LazyLock::new(GlobalChannelTx::new);
 
 #[derive(Default)]
 pub struct StartupParams {
@@ -174,7 +181,7 @@ pub fn run_egui(cc: &CreationContext, mut state: SystemState) -> Result<Box<dyn 
         .set_visuals_of(egui::Theme::Light, state.get_visuals());
     cc.egui_ctx.all_styles_mut(|style| {
         if state.user.config.animation_time == 0.0 {
-            info!("With animation_time set to 0.0, animations cannot be enabled.")
+            info!("With animation_time set to 0.0, animations cannot be enabled.");
         }
         style.animation_time = if state.user.config.animation_enabled() {
             state.user.config.animation_time
@@ -272,6 +279,11 @@ struct CanvasState {
 
 impl SystemState {
     pub fn update(&mut self, message: Message) -> Option<()> {
+        if tracing::enabled!(tracing::Level::TRACE)
+            && !matches!(message, Message::CommandPromptUpdate { .. })
+        {
+            tracing::trace!("{message:?}");
+        }
         match message {
             Message::SetActiveScope(scope) => {
                 let waves = self.user.waves.as_mut()?;
@@ -303,7 +315,7 @@ impl SystemState {
                     self.save_current_canvas(undo_msg);
                     if let Some(waves) = self.user.waves.as_mut() {
                         if let (Some(cmd), _) =
-                            waves.add_variables(&self.translators, vars, None, true, false)
+                            waves.add_variables(&self.translators, vars, None, true, false, None)
                         {
                             self.load_variables(cmd);
                         }
@@ -331,7 +343,7 @@ impl SystemState {
 
                 // TODO add parameter to add_variables, insert to (self.drag_target_idx, self.drag_source_idx)
                 if let (Some(cmd), _) =
-                    waves.add_variables(&self.translators, vars, None, true, false)
+                    waves.add_variables(&self.translators, vars, None, true, false, None)
                 {
                     self.load_variables(cmd);
                 }
@@ -344,7 +356,7 @@ impl SystemState {
                 let passed_or_focused = waves.insert_position(waves.focused_item);
                 let target = passed_or_focused.unwrap_or_else(|| waves.end_insert_position());
 
-                self.add_scope_as_group(scope, target, recursive);
+                self.add_scope_as_group(&scope, target, recursive, None);
                 self.invalidate_draw_commands();
 
                 self.user.waves.as_mut()?.compute_variable_display_names();
@@ -425,7 +437,7 @@ impl SystemState {
                             stream_id,
                             id,
                             name.clone(),
-                        ))
+                        ));
                     }
                 }
                 self.invalidate_draw_commands();
@@ -487,22 +499,20 @@ impl SystemState {
                 let new_focus_vidx = VisibleItemIndex(match direction {
                     MoveDir::Up => waves
                         .focused_item
-                        .map(|vidx| vidx.0)
-                        .unwrap_or(visible_item_cnt)
+                        .map_or(visible_item_cnt, |vidx| vidx.0)
                         .saturating_sub(count),
                     MoveDir::Down => waves
                         .focused_item
-                        .map(|vidx| vidx.0)
-                        .unwrap_or(usize::MAX)
+                        .map_or(usize::MAX, |vidx| vidx.0)
                         .wrapping_add(count)
                         .clamp(0, visible_item_cnt - 1),
                 });
 
                 if select {
                     if let Some(vidx) = waves.focused_item {
-                        waves.items_tree.xselect(vidx, true)
-                    };
-                    waves.items_tree.xselect(new_focus_vidx, true)
+                        waves.items_tree.xselect(vidx, true);
+                    }
+                    waves.items_tree.xselect(new_focus_vidx, true);
                 }
                 waves.focused_item = Some(new_focus_vidx);
             }
@@ -530,7 +540,7 @@ impl SystemState {
             }
             Message::SetLogsVisible(visibility) => self.user.show_logs = visibility,
             Message::SetCursorWindowVisible(visibility) => {
-                self.user.show_cursor_window = visibility
+                self.user.show_cursor_window = visibility;
             }
             Message::VerticalScroll(direction, count) => {
                 let waves = self.user.waves.as_mut()?;
@@ -548,25 +558,78 @@ impl SystemState {
                     }
                 }
             }
-            Message::RemoveItemByIndex(vidx) => {
-                let waves = self.user.waves.as_ref();
-                let item_ref = waves
-                    .and_then(|waves| waves.items_tree.get_visible(vidx))
-                    .map(|node| node.item_ref);
-                let undo_msg = item_ref
-                    .and_then(|item_ref| {
-                        waves.and_then(|waves| waves.displayed_items.get(&item_ref))
-                    })
-                    .map(displayed_item::DisplayedItem::name)
-                    .map(|name| format!("Remove item {name}"))
-                    .unwrap_or("Remove one item".to_string());
-                self.save_current_canvas(undo_msg);
-                if let Some(waves) = self.user.waves.as_mut()
-                    && let Some(item_ref) = item_ref
-                {
-                    waves.remove_displayed_item(item_ref)
-                };
+            Message::SetSurverFileWindowVisible(visibility) => {
+                self.user.show_server_file_window = visibility;
             }
+            Message::LoadSurverFileByIndex(file_index, load_options) => {
+                // Disable file window in case executing from command/test
+                self.user.show_server_file_window = false;
+                let force_switch = self.user.selected_server_file_index != file_index;
+                self.user.selected_server_file_index = file_index;
+                *self.surver_selected_file.borrow_mut() = file_index;
+                if let Some(url) = self.user.surver_url.as_ref() {
+                    self.load_wave_from_url(url.to_string(), load_options, force_switch);
+                }
+            }
+            Message::LoadSurverFileByName(file_name, load_options) => {
+                // Disable file window in case executing from command/test
+                self.user.show_server_file_window = false;
+                let file_index = self
+                    .user
+                    .surver_file_infos
+                    .as_ref()?
+                    .iter()
+                    .position(|fi| fi.filename == file_name);
+                let force_switch = self.user.selected_server_file_index != file_index;
+
+                self.user.selected_server_file_index = file_index;
+                *self.surver_selected_file.borrow_mut() = file_index;
+                if let Some(url) = self.user.surver_url.as_ref() {
+                    self.load_wave_from_url(url.to_string(), load_options, force_switch);
+                }
+            }
+            Message::RemoveVisibleItems(target) => match target {
+                MessageTarget::Explicit(vidx) => {
+                    let waves = self.user.waves.as_ref();
+                    let item_ref = waves
+                        .and_then(|waves| waves.items_tree.get_visible(vidx))
+                        .map(|node| node.item_ref);
+                    let undo_msg = item_ref
+                        .and_then(|item_ref| {
+                            waves.and_then(|waves| waves.displayed_items.get(&item_ref))
+                        })
+                        .map(displayed_item::DisplayedItem::name)
+                        .map_or("Remove one item".to_string(), |name| {
+                            format!("Remove item {name}")
+                        });
+                    self.save_current_canvas(undo_msg);
+
+                    if let Some(waves) = self.user.waves.as_mut()
+                        && let Some(item_ref) = item_ref
+                    {
+                        waves.remove_displayed_item(item_ref);
+                    }
+                }
+                MessageTarget::CurrentSelection => {
+                    self.save_current_canvas("Remove selected items".to_owned());
+                    let waves = self.user.waves.as_mut()?;
+
+                    let mut remove_ids: Vec<_> = waves
+                        .items_tree
+                        .iter_visible_selected()
+                        .map(|node| node.item_ref)
+                        .collect();
+                    if let Some(node) = waves
+                        .focused_item
+                        .and_then(|focus| waves.items_tree.get_visible(focus))
+                    {
+                        remove_ids.push(node.item_ref);
+                    }
+                    for &item_ref in remove_ids.iter() {
+                        waves.remove_displayed_item(item_ref);
+                    }
+                }
+            },
             Message::RemoveItems(items) => {
                 let undo_msg = self
                     .user
@@ -584,7 +647,7 @@ impl SystemState {
                             Some(format!("Remove {} items", items.len()))
                         }
                     })
-                    .unwrap_or("".to_string());
+                    .unwrap_or_default();
                 self.save_current_canvas(undo_msg);
 
                 let waves = self.user.waves.as_mut()?;
@@ -615,7 +678,8 @@ impl SystemState {
                 viewport_idx,
             } => {
                 let waves = self.user.waves.as_mut()?;
-                waves.viewports[viewport_idx].handle_canvas_scroll(delta.y as f64 + delta.x as f64);
+                waves.viewports[viewport_idx]
+                    .handle_canvas_scroll(f64::from(delta.y) + f64::from(delta.x));
                 self.invalidate_draw_commands();
             }
             Message::CanvasZoom {
@@ -627,7 +691,7 @@ impl SystemState {
                 if let Some(num_timestamps) = waves.num_timestamps() {
                     waves.viewports[viewport_idx].handle_canvas_zoom(
                         mouse_ptr,
-                        delta as f64,
+                        f64::from(delta),
                         &num_timestamps,
                     );
                     self.invalidate_draw_commands();
@@ -709,7 +773,7 @@ impl SystemState {
                                 .unwrap()
                                 .variable_meta(&variable.variable_ref)
                                 .map_err(|e| {
-                                    warn!("Error trying to get variable metadata: {e:#?}")
+                                    warn!("Error trying to get variable metadata: {e:#?}");
                                 })
                             else {
                                 return;
@@ -795,7 +859,7 @@ impl SystemState {
                         waves
                             .displayed_items
                             .entry(node.item_ref)
-                            .and_modify(|item| item.set_color(color_name.clone()));
+                            .and_modify(|item| item.set_color(&color_name));
                     }
                     MessageTarget::CurrentSelection => {
                         if let Some(focused) = waves.focused_item {
@@ -803,14 +867,14 @@ impl SystemState {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_color(color_name.clone()));
+                                .and_modify(|item| item.set_color(&color_name));
                         }
 
                         for node in waves.items_tree.iter_visible_selected() {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_color(color_name.clone()));
+                                .and_modify(|item| item.set_color(&color_name));
                         }
                     }
                 }
@@ -828,6 +892,27 @@ impl SystemState {
                     .entry(node.item_ref)
                     .and_modify(|item| item.set_name(name));
             }
+            Message::ItemNameReset(target) => {
+                self.save_current_canvas("Resetting item name(s)".to_owned());
+                let waves = self.user.waves.as_mut()?;
+                match target {
+                    MessageTarget::Explicit(vidx) => {
+                        let node = waves.items_tree.get_visible(vidx)?;
+                        waves
+                            .displayed_items
+                            .entry(node.item_ref)
+                            .and_modify(|item| item.set_name(None));
+                    }
+                    MessageTarget::CurrentSelection => {
+                        for node in waves.items_tree.iter_visible_selected() {
+                            waves
+                                .displayed_items
+                                .entry(node.item_ref)
+                                .and_modify(|item| item.set_name(None));
+                        }
+                    }
+                }
+            }
             Message::ItemBackgroundColorChange(vidx, color_name) => {
                 self.save_current_canvas(format!(
                     "Change item background color to {}",
@@ -841,7 +926,7 @@ impl SystemState {
                         waves
                             .displayed_items
                             .entry(node.item_ref)
-                            .and_modify(|item| item.set_background_color(color_name.clone()));
+                            .and_modify(|item| item.set_background_color(&color_name));
                     }
                     MessageTarget::CurrentSelection => {
                         if let Some(focused) = waves.focused_item {
@@ -849,14 +934,14 @@ impl SystemState {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_background_color(color_name.clone()));
+                                .and_modify(|item| item.set_background_color(&color_name));
                         }
 
                         for node in waves.items_tree.iter_visible_selected() {
                             waves
                                 .displayed_items
                                 .entry(node.item_ref)
-                                .and_modify(|item| item.set_background_color(color_name.clone()));
+                                .and_modify(|item| item.set_background_color(&color_name));
                         }
                     }
                 }
@@ -864,15 +949,73 @@ impl SystemState {
             Message::ItemHeightScalingFactorChange(vidx, scale) => {
                 self.save_current_canvas(format!("Change item height scaling factor to {scale}"));
                 let waves = self.user.waves.as_mut()?;
-                let vidx = match vidx {
-                    MessageTarget::Explicit(vidx) => vidx,
-                    MessageTarget::CurrentSelection => waves.focused_item?,
+
+                match vidx {
+                    MessageTarget::Explicit(vidx) => {
+                        let node = waves.items_tree.get_visible(vidx)?;
+                        waves
+                            .displayed_items
+                            .entry(node.item_ref)
+                            .and_modify(|item| item.set_height_scaling_factor(scale));
+                    }
+                    MessageTarget::CurrentSelection => {
+                        if let Some(focused) = waves.focused_item {
+                            let node = waves.items_tree.get_visible(focused)?;
+                            waves
+                                .displayed_items
+                                .entry(node.item_ref)
+                                .and_modify(|item| item.set_height_scaling_factor(scale));
+                        }
+
+                        for node in waves.items_tree.iter_visible_selected() {
+                            waves
+                                .displayed_items
+                                .entry(node.item_ref)
+                                .and_modify(|item| item.set_height_scaling_factor(scale));
+                        }
+                    }
+                }
+            }
+            Message::SetAnalogSettings(vidx, new_settings) => {
+                self.save_current_canvas("Set analog state".into());
+                self.invalidate_draw_commands();
+                let waves = self.user.waves.as_mut()?;
+
+                // Update settings while preserving existing cache
+                let update = |item: &mut DisplayedItem| {
+                    if let DisplayedItem::Variable(var) = item {
+                        match (&mut var.analog, new_settings) {
+                            (Some(s), Some(new)) => s.settings = new,
+                            (None, Some(new)) => var.analog = Some(AnalogVarState::new(new)),
+                            (_, None) => var.analog = None,
+                        }
+                    }
                 };
-                let node = waves.items_tree.get_visible(vidx)?;
-                waves
-                    .displayed_items
-                    .entry(node.item_ref)
-                    .and_modify(|item| item.set_height_scaling_factor(scale));
+
+                match vidx {
+                    MessageTarget::Explicit(vidx) => {
+                        let node = waves.items_tree.get_visible(vidx)?;
+                        waves
+                            .displayed_items
+                            .entry(node.item_ref)
+                            .and_modify(update);
+                    }
+                    MessageTarget::CurrentSelection => {
+                        if let Some(focused) = waves.focused_item {
+                            let node = waves.items_tree.get_visible(focused)?;
+                            waves
+                                .displayed_items
+                                .entry(node.item_ref)
+                                .and_modify(update);
+                        }
+                        for node in waves.items_tree.iter_visible_selected() {
+                            waves
+                                .displayed_items
+                                .entry(node.item_ref)
+                                .and_modify(update);
+                        }
+                    }
+                }
             }
             Message::MoveCursorToTransition {
                 next,
@@ -935,26 +1078,26 @@ impl SystemState {
                     })
                     .collect_vec();
 
-                transactions.sort();
+                transactions.sort_unstable();
                 let tx = if let Some(focused_tx) = &waves.focused_transaction.0 {
                     let next_id = transactions
                         .iter()
                         .enumerate()
                         .find(|(_, tx)| **tx == focused_tx.id)
-                        .map(|(vec_idx, _)| {
-                            if next {
-                                if vec_idx + 1 < transactions.len() {
-                                    vec_idx + 1
+                        .map_or(
+                            if next { transactions.len() - 1 } else { 0 },
+                            |(vec_idx, _)| {
+                                if next {
+                                    if vec_idx + 1 < transactions.len() {
+                                        vec_idx + 1
+                                    } else {
+                                        transactions.len() - 1
+                                    }
                                 } else {
-                                    transactions.len() - 1
+                                    vec_idx.saturating_sub(1)
                                 }
-                            } else if vec_idx as i32 - 1 > 0 {
-                                vec_idx - 1
-                            } else {
-                                0
-                            }
-                        })
-                        .unwrap_or(if next { transactions.len() - 1 } else { 0 });
+                            },
+                        );
                     Some(TransactionRef {
                         id: *transactions.get(next_id).unwrap(),
                     })
@@ -992,15 +1135,22 @@ impl SystemState {
                 self.expand_parameter_section = true;
             }
             Message::LoadFile(filename, load_options) => {
+                self.user.selected_server_file_index = None;
+                *self.surver_selected_file.borrow_mut() = None;
                 #[cfg(not(target_arch = "wasm32"))]
                 self.load_from_file(filename, load_options).ok();
                 #[cfg(target_arch = "wasm32")]
                 error!("Cannot load file from path in WASM");
             }
             Message::LoadWaveformFileFromUrl(url, load_options) => {
-                self.load_wave_from_url(url, load_options);
+                self.user.selected_server_file_index = None;
+                *self.surver_selected_file.borrow_mut() = None;
+                // If we provide URL at command line and it is a Surver URL, we want to force a switch
+                self.load_wave_from_url(url, load_options, true);
             }
             Message::LoadFromData(data, load_options) => {
+                self.user.selected_server_file_index = None;
+                *self.surver_selected_file.borrow_mut() = None;
                 self.load_from_data(data, load_options).ok();
             }
             #[cfg(feature = "python")]
@@ -1016,15 +1166,15 @@ impl SystemState {
                 perform_work(
                     move || match PluginTranslator::new(path.into_std_path_buf()) {
                         Ok(t) => {
-                            if let Err(e) = sender.send(Message::TranslatorLoaded(Box::new(t))) {
+                            if let Err(e) = sender.send(Message::TranslatorLoaded(Arc::new(t))) {
                                 error!("Failed to send message: {e}");
                             }
                         }
                         Err(e) => {
-                            error!("Failed to load wasm translator {e:#}")
+                            error!("Failed to load wasm translator {e:#}");
                         }
                     },
-                )
+                );
             }
             Message::LoadCommandFile(path) => {
                 self.add_batch_commands(read_command_file(&path));
@@ -1036,13 +1186,52 @@ impl SystemState {
                 self.add_batch_commands(read_command_bytes(bytes));
             }
             Message::SetupCxxrtl(kind) => self.connect_to_cxxrtl(kind, false),
-            Message::SurferServerStatus(_start, server, status) => {
-                self.server_status_to_progress(server, status);
+            Message::SetSurverStatus(_start, server, status) => {
+                self.user.surver_file_infos = Some(status.file_infos.clone());
+                info!(
+                    "Received surfer server status from {server}. {} files available.",
+                    status.file_infos.len()
+                );
+                self.user.surver_url = Some(server.clone());
+                if status.file_infos.is_empty() {
+                    warn!("Received surfer server status with no file infos");
+                    return None;
+                }
+                if self.user.selected_server_file_index.is_none() {
+                    if status.file_infos.len() == 1 {
+                        // if only one file is available, select it automatically
+                        self.user.selected_server_file_index = Some(0);
+                        *self.surver_selected_file.borrow_mut() = Some(0);
+                        info!(
+                            "Only one file available on server {}, loading it automatically",
+                            server
+                        );
+                        self.load_wave_from_url(server.clone(), LoadOptions::Clear, false);
+                    } else {
+                        // if no file is selected, show the server file selection window
+                        self.user.show_server_file_window = true;
+                        self.progress_tracker = None;
+                    }
+                }
+
+                if let Some(file_index) = self.user.selected_server_file_index {
+                    if file_index >= status.file_infos.len() {
+                        warn!(
+                            "Selected server file index {file_index} is out of bounds ({} files available)",
+                            status.file_infos.len()
+                        );
+                        return None;
+                    }
+                    self.server_status_to_progress(&server, &status.file_infos[file_index]);
+                }
             }
             Message::FileDropped(dropped_file) => {
                 self.load_from_dropped(dropped_file)
                     .map_err(|e| error!("{e:#?}"))
                     .ok();
+            }
+            Message::StopProgressTracker => {
+                self.progress_tracker = None;
             }
             Message::WaveHeaderLoaded(start, source, load_options, header) => {
                 // for files using the `wellen` backend, we load the header before parsing the body
@@ -1079,10 +1268,10 @@ impl SystemState {
                         // start parsing of the body
                         self.load_wave_body(source, header.body, header.body_len, shared_hierarchy);
                     }
-                    HeaderResult::Remote(hierarchy, file_format, server) => {
+                    HeaderResult::Remote(hierarchy, file_format, server, file_index) => {
                         // register waveform as loaded (but with no variable info yet!)
                         let new_waves = Box::new(WaveContainer::new_remote_waveform(
-                            server.clone(),
+                            &server,
                             hierarchy.clone(),
                         ));
                         self.on_waves_loaded(
@@ -1092,7 +1281,11 @@ impl SystemState {
                             load_options,
                         );
                         // body is already being parsed on the server, we need to request the time table though
-                        Self::get_time_table_from_server(self.channels.msg_sender.clone(), server);
+                        get_time_table_from_server(
+                            self.channels.msg_sender.clone(),
+                            server,
+                            file_index,
+                        );
                     }
                 }
             }
@@ -1134,7 +1327,7 @@ impl SystemState {
                     let source = match source {
                         WaveSource::File(path) => path.to_string(),
                         WaveSource::Url(url) => url,
-                        _ => "".to_string(),
+                        _ => String::new(),
                     };
                     self.channels.wcp_s2c_sender.as_ref().map(|ch| {
                         block_on(
@@ -1224,6 +1417,7 @@ impl SystemState {
             Message::SetScopeTooltip(v) => self.user.show_scope_tooltip = Some(v),
             Message::SetOverviewVisible(v) => self.user.show_overview = Some(v),
             Message::SetShowVariableDirection(v) => self.user.show_variable_direction = Some(v),
+            Message::SetTransitionValue(v) => self.user.transition_value = Some(v),
             Message::SetShowIndices(v) => {
                 let new = v;
                 self.user.show_variable_indices = Some(new);
@@ -1235,17 +1429,17 @@ impl SystemState {
                 self.user.highlight_focused = Some(highlight);
             }
             Message::HideCommandPrompt => {
-                *self.command_prompt_text.borrow_mut() = "".to_string();
+                *self.command_prompt_text.borrow_mut() = String::new();
                 self.command_prompt.suggestions = vec![];
                 self.command_prompt.selected = self.command_prompt.previous_commands.len();
                 self.command_prompt.visible = false;
             }
             Message::ShowCommandPrompt(text, selected) => {
-                self.command_prompt.new_text = Some((text, selected.unwrap_or("".to_owned())));
+                self.command_prompt.new_text = Some((text, selected.unwrap_or(String::new())));
                 self.command_prompt.visible = true;
             }
             Message::FileDownloaded(url, bytes, load_options) => {
-                self.load_from_bytes(WaveSource::Url(url), bytes.to_vec(), load_options)
+                self.load_from_bytes(WaveSource::Url(url), bytes.to_vec(), load_options);
             }
             Message::CommandFileDownloaded(_url, bytes) => {
                 self.add_batch_commands(read_command_bytes(bytes.to_vec()));
@@ -1260,7 +1454,7 @@ impl SystemState {
                 self.user.config = config;
 
                 let ctx = &self.context.as_ref()?;
-                ctx.set_visuals(self.get_visuals())
+                ctx.set_visuals(self.get_visuals());
             }
             Message::ReloadConfig => {
                 // FIXME think about a structured way to collect errors
@@ -1275,9 +1469,10 @@ impl SystemState {
             }
             Message::ReloadWaveform(keep_unavailable) => {
                 let waves = self.user.waves.as_ref()?;
-                let options = LoadOptions {
-                    keep_variables: true,
-                    keep_unavailable,
+                let options = if keep_unavailable {
+                    LoadOptions::KeepAll
+                } else {
+                    LoadOptions::KeepAvailable
                 };
                 match &waves.source {
                     WaveSource::File(filename) => {
@@ -1291,9 +1486,9 @@ impl SystemState {
                             .and_then(|filename| self.load_from_file(filename, options).ok());
                     }
                     WaveSource::Url(url) => {
-                        self.load_wave_from_url(url.clone(), options);
+                        self.load_wave_from_url(url.clone(), options, false);
                     }
-                };
+                }
 
                 for translator in self.translators.all_translators() {
                     translator.reload(self.channels.msg_sender.clone());
@@ -1304,7 +1499,7 @@ impl SystemState {
                 AutoLoad::Always => self.update(Message::ReloadWaveform(true))?,
                 AutoLoad::Never => (),
                 AutoLoad::Ask => {
-                    self.user.show_reload_suggestion = Some(ReloadWaveformDialog::default())
+                    self.user.show_reload_suggestion = Some(ReloadWaveformDialog::default());
                 }
             },
             Message::CloseReloadWaveformDialog {
@@ -1339,7 +1534,7 @@ impl SystemState {
                 AutoLoad::Never => {}
                 AutoLoad::Ask => {
                     self.user.show_open_sibling_state_file_suggestion =
-                        Some(OpenSiblingStateFileDialog::default())
+                        Some(OpenSiblingStateFileDialog::default());
                 }
             },
             Message::CloseOpenSiblingStateFileDialog {
@@ -1365,6 +1560,10 @@ impl SystemState {
                 self.user.clock_highlight_type = Some(new_type);
             }
             Message::SetFillHighValues(fill) => self.user.fill_high_values = Some(fill),
+            Message::SetDinotraceStyle(dino_style) => {
+                self.user.use_dinotrace_style = Some(dino_style);
+                self.invalidate_draw_commands();
+            }
             Message::AddMarker {
                 time,
                 name,
@@ -1411,25 +1610,39 @@ impl SystemState {
                     );
                 }
             }
-            Message::ChangeVariableNameType(vidx, name_type) => {
+            Message::ChangeVariableNameType(target, name_type) => {
                 let waves = self.user.waves.as_mut()?;
-                // checks if vidx is Some then use that, else try focused variable
-                let vidx = match vidx {
-                    MessageTarget::Explicit(vidx) => vidx,
-                    MessageTarget::CurrentSelection => waves.focused_item?,
-                };
-                let item_ref = waves
-                    .items_tree
-                    .get_visible(vidx)
-                    .map(|node| node.item_ref)?;
-
                 let mut recompute_names = false;
-                waves.displayed_items.entry(item_ref).and_modify(|item| {
-                    if let DisplayedItem::Variable(variable) = item {
-                        variable.display_name_type = name_type;
-                        recompute_names = true;
+                let mut change_type = |item_ref: DisplayedItemRef| {
+                    waves.displayed_items.entry(item_ref).and_modify(|item| {
+                        if let DisplayedItem::Variable(variable) = item {
+                            variable.display_name_type = name_type;
+                            recompute_names = true;
+                        }
+                    });
+                };
+
+                match target {
+                    MessageTarget::Explicit(vidx) => {
+                        if let Some(item_ref) =
+                            waves.items_tree.get_visible(vidx).map(|node| node.item_ref)
+                        {
+                            change_type(item_ref);
+                        }
                     }
-                });
+                    MessageTarget::CurrentSelection => {
+                        waves
+                            .items_tree
+                            .iter_visible_selected()
+                            .for_each(|node| change_type(node.item_ref));
+                        waves
+                            .focused_item
+                            .and_then(|vidx| waves.items_tree.get_visible(vidx))
+                            .map(|node| node.item_ref)
+                            .map(|item_ref| change_type(item_ref));
+                    }
+                }
+
                 if recompute_names {
                     waves.compute_variable_display_names();
                 }
@@ -1525,14 +1738,12 @@ impl SystemState {
             Message::SetVariableNameFilterCaseInsensitive(s) => {
                 self.user.variable_filter.name_filter_case_insensitive = s;
             }
-            Message::SetVariableIOFilter(t, b) => {
-                match t {
-                    VariableIOFilterType::Output => self.user.variable_filter.include_outputs = b,
-                    VariableIOFilterType::Input => self.user.variable_filter.include_inputs = b,
-                    VariableIOFilterType::InOut => self.user.variable_filter.include_inouts = b,
-                    VariableIOFilterType::Other => self.user.variable_filter.include_others = b,
-                };
-            }
+            Message::SetVariableIOFilter(t, b) => match t {
+                VariableIOFilterType::Output => self.user.variable_filter.include_outputs = b,
+                VariableIOFilterType::Input => self.user.variable_filter.include_inputs = b,
+                VariableIOFilterType::InOut => self.user.variable_filter.include_inouts = b,
+                VariableIOFilterType::Other => self.user.variable_filter.include_others = b,
+            },
             Message::SetVariableGroupByDirection(b) => {
                 self.user.variable_filter.group_by_direction = b;
             }
@@ -1589,7 +1800,7 @@ impl SystemState {
                 let target = self.user.drag_target_idx.take();
 
                 if let (Some(cmd), _) =
-                    waves.add_variables(&self.translators, variables, target, true, false)
+                    waves.add_variables(&self.translators, variables, target, true, false, None)
                 {
                     self.load_variables(cmd);
                 }
@@ -1627,11 +1838,11 @@ impl SystemState {
                     .filter_map(|info| info.node.selected.then_some(info.idx))
                     .collect::<Vec<_>>();
                 if let Some(idx) = focused_index {
-                    to_move.push(idx)
-                };
+                    to_move.push(idx);
+                }
                 if let Some(vidx) = waves.items_tree.to_displayed(source_vidx) {
-                    to_move.push(vidx)
-                };
+                    to_move.push(vidx);
+                }
 
                 let _ = waves.items_tree.move_items(to_move, target_position);
 
@@ -1655,7 +1866,11 @@ impl SystemState {
                             self.get_variable_value(
                                 waves,
                                 &field_ref,
-                                &waves.cursor.as_ref().and_then(num::BigInt::to_biguint),
+                                waves
+                                    .cursor
+                                    .as_ref()
+                                    .and_then(num::BigInt::to_biguint)
+                                    .as_ref(),
                             )
                         } else {
                             None
@@ -1694,7 +1909,7 @@ impl SystemState {
             Message::SetViewportStrategy(s) => {
                 if let Some(waves) = &mut self.user.waves {
                     for vp in &mut waves.viewports {
-                        vp.move_strategy = s
+                        vp.move_strategy = s;
                     }
                 }
             }
@@ -1743,7 +1958,7 @@ impl SystemState {
             } => {
                 self.save_current_canvas(format!(
                     "Create group {}",
-                    name.clone().unwrap_or("".to_owned())
+                    name.clone().unwrap_or(String::new())
                 ));
                 self.invalidate_draw_commands();
                 let waves = self.user.waves.as_mut()?;
@@ -1811,13 +2026,13 @@ impl SystemState {
                     },
                 ) {
                     dump_tree(waves);
-                    error!("failed to move items into group: {e:?}")
+                    error!("failed to move items into group: {e:?}");
                 }
                 waves.items_tree.xselect_all_visible(false);
                 waves.focused_item = waves
                     .items_tree
                     .iter_visible_extra()
-                    .find_map(|info| (info.node.item_ref == group_ref).then_some(info.vidx))
+                    .find_map(|info| (info.node.item_ref == group_ref).then_some(info.vidx));
             }
             Message::GroupDissolve(item_ref) => {
                 self.save_current_canvas("Dissolve group".to_owned());
@@ -1847,7 +2062,7 @@ impl SystemState {
                 } + &(if recursive {
                     " recursive".to_owned()
                 } else {
-                    "".to_owned()
+                    String::new()
                 });
                 // TODO add group name? would have to break the pattern that we insert an
                 // undo message even if no waves are available
@@ -1925,6 +2140,106 @@ impl SystemState {
                     self.channels.wcp_s2c_sender = Some(WCP_SC_HANDLER.tx.clone());
                 }
             }
+            Message::BuildAnalogCache {
+                display_id,
+                cache_key,
+            } => {
+                let waves = self.user.waves.as_mut()?;
+                let generation = waves.cache_generation;
+
+                // Check if already have valid entry (building or ready)
+                let item = waves.displayed_items.get(&display_id)?;
+                let DisplayedItem::Variable(var) = item else {
+                    return None;
+                };
+                if var
+                    .analog
+                    .as_ref()?
+                    .cache
+                    .as_ref()
+                    .is_some_and(|e| e.generation == generation && e.cache_key == cache_key)
+                {
+                    return None;
+                }
+
+                // Try to share from in-flight builds first (handles removed-but-still-building case)
+                if let Some(entry) = waves.inflight_caches.get(&cache_key)
+                    && entry.generation == generation
+                {
+                    if let DisplayedItem::Variable(var) =
+                        waves.displayed_items.get_mut(&display_id)?
+                    {
+                        var.analog.as_mut()?.cache = Some(entry.clone());
+                    }
+                    return None; // Shared from in-flight build
+                }
+
+                // Try to share from another displayed variable (O(n) scan - only during cache build)
+                let existing = waves
+                    .displayed_items
+                    .values()
+                    .filter_map(|item| match item {
+                        DisplayedItem::Variable(v) => v.analog.as_ref()?.cache.as_ref(),
+                        _ => None,
+                    })
+                    .find(|e| e.cache_key == cache_key && e.generation == generation)
+                    .cloned();
+
+                if let Some(entry) = existing {
+                    if let DisplayedItem::Variable(var) =
+                        waves.displayed_items.get_mut(&display_id)?
+                    {
+                        var.analog.as_mut()?.cache = Some(entry);
+                    }
+                    return None; // Shared existing entry (may still be building)
+                }
+
+                // Clone variable_ref only when we need to spawn builder
+                let variable_ref = match waves.displayed_items.get(&display_id)? {
+                    DisplayedItem::Variable(v) => v.variable_ref.clone(),
+                    _ => return None,
+                };
+
+                // Create new entry and spawn builder
+                let entry = std::sync::Arc::new(crate::analog_signal_cache::AnalogCacheEntry::new(
+                    cache_key.clone(),
+                    generation,
+                ));
+
+                if let DisplayedItem::Variable(var) = waves.displayed_items.get_mut(&display_id)? {
+                    var.analog.as_mut()?.cache = Some(entry.clone());
+                }
+
+                let translator = self.translators.clone_translator(&cache_key.1);
+
+                // Track in-flight build for sharing with other variables
+                waves
+                    .inflight_caches
+                    .insert(cache_key.clone(), entry.clone());
+
+                waves.build_analog_cache_async(
+                    entry,
+                    &variable_ref,
+                    translator,
+                    &self.channels.msg_sender,
+                );
+            }
+            Message::AnalogCacheBuilt { entry, result } => {
+                OUTSTANDING_TRANSACTIONS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                // Remove from in-flight registry (may already be gone if generation changed)
+                if let Some(waves) = self.user.waves.as_mut() {
+                    waves.inflight_caches.remove(&entry.cache_key);
+                }
+                match result {
+                    Ok(cache) => {
+                        entry.set(cache);
+                    }
+                    Err(err) => {
+                        warn!("Failed to build analog cache: {err}");
+                    }
+                }
+                self.invalidate_draw_commands();
+            }
             Message::Exit | Message::ToggleFullscreen => {} // Handled in eframe::update
             Message::AddViewport => {
                 let waves = self.user.waves.as_mut()?;
@@ -1965,10 +2280,10 @@ impl SystemState {
             }
             Message::RemoveGraphic(id) => {
                 let waves = self.user.waves.as_mut()?;
-                waves.graphics.retain(|k, _| k != &id)
+                waves.graphics.retain(|k, _| k != &id);
             }
             Message::ExpandDrawnItem { item, levels } => {
-                self.items_to_expand.borrow_mut().push((item, levels))
+                self.items_to_expand.borrow_mut().push((item, levels));
             }
             Message::AddCharToPrompt(c) => *self.char_to_add_to_prompt.borrow_mut() = Some(c),
         }
@@ -1977,9 +2292,10 @@ impl SystemState {
 
     pub fn add_scope_as_group(
         &mut self,
-        scope: ScopeRef,
+        scope: &ScopeRef,
         pos: TargetPosition,
         recursive: bool,
+        variable_name_type: Option<VariableNameType>,
     ) -> TargetPosition {
         let Some(waves) = self.user.waves.as_mut() else {
             return pos;
@@ -1989,12 +2305,17 @@ impl SystemState {
         };
 
         let variables = container
-            .variables_in_scope(&scope)
+            .variables_in_scope(scope)
             .iter()
             .sorted_by(|a, b| numeric_sort::cmp(&a.name, &b.name))
             .cloned()
             .collect_vec();
-        let child_scopes = container.child_scopes(&scope);
+        let child_scopes = container.child_scopes(scope);
+        let variable_name_type = variable_name_type.or_else(|| {
+            container
+                .scope_is_variable(scope)
+                .then_some(VariableNameType::Local)
+        });
 
         waves.add_group(scope.name(), Some(pos));
         let into_group_pos = TargetPosition {
@@ -2008,6 +2329,7 @@ impl SystemState {
             Some(into_group_pos),
             false,
             false,
+            variable_name_type,
         );
         let mut into_group_pos = TargetPosition {
             before: ItemIndex(into_group_pos.before.0 + variable_refs.len()),
@@ -2020,7 +2342,8 @@ impl SystemState {
 
         if recursive {
             for child in child_scopes.unwrap_or(vec![]) {
-                into_group_pos = self.add_scope_as_group(child, into_group_pos, recursive);
+                into_group_pos =
+                    self.add_scope_as_group(&child, into_group_pos, recursive, variable_name_type);
                 into_group_pos.level = pos.level + 1;
             }
         }
@@ -2074,12 +2397,11 @@ pub fn dump_tree(waves: &WaveData) {
             &waves
                 .displayed_items
                 .get(&node.item_ref)
-                .map(|item| item.name())
-                .unwrap_or("?".to_owned()),
+                .map_or("?".to_owned(), displayed_item::DisplayedItem::name),
         );
         result.push_str(&format!("   ({:?})", node.item_ref));
         if node.selected {
-            result.push_str(" !SEL! ")
+            result.push_str(" !SEL! ");
         }
         result.push('\n');
     }
@@ -2089,6 +2411,6 @@ pub fn dump_tree(waves: &WaveData) {
 pub struct StateWrapper(Arc<RwLock<SystemState>>);
 impl App for StateWrapper {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        App::update(&mut *self.0.write().unwrap(), ctx, frame)
+        App::update(&mut *self.0.write().unwrap(), ctx, frame);
     }
 }

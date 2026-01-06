@@ -1,25 +1,22 @@
 use crate::SystemState;
 use crate::message::Message;
 use crate::wave_source::LoadOptions;
-use crate::wcp::proto::{WcpCSMessage, WcpCommand, WcpSCMessage};
 
 use port_check::free_local_ipv4_port_in_range;
 use serde_json::Error as serde_Error;
+use surfer_wcp::{WcpCSMessage, WcpCommand, WcpSCMessage};
 use test_log::test;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Duration, sleep, timeout};
 
 use itertools::Itertools;
-use lazy_static::lazy_static;
 use std::future::Future;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
 fn get_test_port() -> u16 {
-    lazy_static! {
-        static ref PORT_NUM: Arc<Mutex<u16>> = Arc::new(Mutex::new(54321));
-    }
+    static PORT_NUM: LazyLock<Arc<Mutex<u16>>> = LazyLock::new(|| Arc::new(Mutex::new(54321)));
     let mut port = PORT_NUM.lock().unwrap();
     let free = free_local_ipv4_port_in_range(*port + 1..65535u16);
     *port = free.unwrap();
@@ -284,7 +281,7 @@ fn response_and_event() {
         msg_sender
             .send(Message::LoadFile(
                 "../examples/counter.vcd".into(),
-                LoadOptions::clean(),
+                LoadOptions::Clear,
             ))
             .unwrap();
         get_json_response(&stream, &mut state)

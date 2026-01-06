@@ -13,7 +13,7 @@ use std::sync::atomic::Ordering;
 use surfer_translation_types::ScopeRef;
 use tracing::{trace, warn};
 
-use super::proto::{ItemInfo, MarkerInfo, WcpCSMessage, WcpCommand, WcpResponse, WcpSCMessage};
+use surfer_wcp::{ItemInfo, MarkerInfo, WcpCSMessage, WcpCommand, WcpResponse, WcpSCMessage};
 
 impl SystemState {
     pub fn handle_wcp_commands(&mut self) {
@@ -41,12 +41,10 @@ impl SystemState {
 
     fn handle_wcp_cs_message(&mut self, message: &WcpCSMessage) {
         if !self.wcp_greeted_signal.load(Ordering::Relaxed) {
-            match message {
-                WcpCSMessage::greeting { .. } => (),
-                _ => {
-                    self.send_error("WCP server has not received greeting messages", vec![], "");
-                    return;
-                }
+            if let WcpCSMessage::greeting { .. } = message {
+            } else {
+                self.send_error("WCP server has not received greeting messages", vec![], "");
+                return;
             }
         }
         match message {
@@ -54,10 +52,10 @@ impl SystemState {
                 match command {
                     WcpCommand::get_item_list => {
                         if let Some(waves) = &self.user.waves {
-                            let ids: Vec<crate::wcp::proto::DisplayedItemRef> = self
+                            let ids: Vec<surfer_wcp::DisplayedItemRef> = self
                                 .get_displayed_items(waves)
                                 .iter()
-                                .map(|r| r.into())
+                                .map(std::convert::Into::into)
                                 .collect_vec();
                             self.send_response(WcpResponse::get_item_list { ids });
                         } else {
@@ -136,12 +134,13 @@ impl SystemState {
                                 None,
                                 true,
                                 false,
+                                None,
                             );
                             if let Some(cmd) = cmd {
                                 self.load_variables(cmd);
                             }
                             self.send_response(WcpResponse::add_variables {
-                                ids: ids.into_iter().map(|id| id.into()).collect_vec(),
+                                ids: ids.into_iter().map(std::convert::Into::into).collect_vec(),
                             });
                             self.invalidate_draw_commands();
                         } else {
@@ -149,7 +148,7 @@ impl SystemState {
                                 "add_variables",
                                 vec![],
                                 "Can't add signals. No waveform loaded",
-                            )
+                            );
                         }
                     }
                     WcpCommand::add_scope { scope, recursive } => {
@@ -165,12 +164,13 @@ impl SystemState {
                                 None,
                                 true,
                                 false,
+                                None,
                             );
                             if let Some(cmd) = cmd {
                                 self.load_variables(cmd);
                             }
                             self.send_response(WcpResponse::add_scope {
-                                ids: ids.into_iter().map(|id| id.into()).collect_vec(),
+                                ids: ids.into_iter().map(std::convert::Into::into).collect_vec(),
                             });
                             self.invalidate_draw_commands();
                         } else {
@@ -192,13 +192,19 @@ impl SystemState {
                         }
 
                         if let Some(waves) = self.user.waves.as_mut() {
-                            let (cmd, ids) =
-                                waves.add_variables(&self.translators, variables, None, true, true);
+                            let (cmd, ids) = waves.add_variables(
+                                &self.translators,
+                                variables,
+                                None,
+                                true,
+                                true,
+                                None,
+                            );
                             if let Some(cmd) = cmd {
                                 self.load_variables(cmd);
                             }
                             self.send_response(WcpResponse::add_items {
-                                ids: ids.into_iter().map(|id| id.into()).collect_vec(),
+                                ids: ids.into_iter().map(std::convert::Into::into).collect_vec(),
                             });
                             self.invalidate_draw_commands();
                         } else {
@@ -206,7 +212,7 @@ impl SystemState {
                                 "add_items",
                                 vec![],
                                 "Can't add items. No waveform loaded",
-                            )
+                            );
                         }
                     }
                     WcpCommand::add_markers { markers } => {
@@ -275,8 +281,9 @@ impl SystemState {
                             self.send_error("remove_items", vec![], "No waveform loaded");
                             return;
                         };
-                        let msgs =
-                            vec![Message::RemoveItems(ids.iter().map(|d| d.into()).collect())];
+                        let msgs = vec![Message::RemoveItems(
+                            ids.iter().map(std::convert::Into::into).collect(),
+                        )];
                         self.update(Message::Batch(msgs));
 
                         self.send_response(WcpResponse::ack);
@@ -312,15 +319,15 @@ impl SystemState {
                             WaveSource::Url(url) => {
                                 self.update(Message::LoadWaveformFileFromUrl(
                                     url,
-                                    LoadOptions::clean(),
+                                    LoadOptions::Clear,
                                 ));
-                                self.send_response(WcpResponse::ack)
+                                self.send_response(WcpResponse::ack);
                             }
                             WaveSource::File(file) => {
                                 // FIXME add support for loading transaction files via Message::LoadTransactionFile
-                                let msg = Message::LoadFile(file, LoadOptions::clean());
+                                let msg = Message::LoadFile(file, LoadOptions::Clear);
                                 self.update(msg);
-                                self.send_response(WcpResponse::ack)
+                                self.send_response(WcpResponse::ack);
                             }
                             _ => {
                                 self.send_error(
@@ -337,19 +344,13 @@ impl SystemState {
                         });
                         self.send_response(WcpResponse::ack);
                     }
-                    WcpCommand::shutdowmn => {
-                        warn!("WCP Shutdown message should not reach this place")
+                    WcpCommand::shutdown => {
+                        warn!("WCP Shutdown message should not reach this place");
                     }
-                };
+                }
             }
             WcpCSMessage::greeting { version, commands } => {
-                if version != "0" {
-                    self.send_error(
-                        "greeting",
-                        vec![],
-                        &format!("Surfer only supports WCP version 0, client requested {version}"),
-                    )
-                } else {
+                if version == "0" {
                     self.wcp_client_capabilities = WcpClientCapabilities::new();
                     if commands.iter().any(|s| s == "waveforms_loaded") {
                         self.wcp_client_capabilities.waveforms_loaded = true;
@@ -365,7 +366,13 @@ impl SystemState {
                     }
                     self.wcp_greeted_signal.store(true, Ordering::Relaxed);
                     self.wcp_greeted_signal.store(true, Ordering::Relaxed);
-                    self.send_greeting()
+                    self.send_greeting();
+                } else {
+                    self.send_error(
+                        "greeting",
+                        vec![],
+                        &format!("Surfer only supports WCP version 0, client requested {version}"),
+                    );
                 }
             }
         }
