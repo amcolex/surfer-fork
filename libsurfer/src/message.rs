@@ -14,7 +14,7 @@ use crate::async_util::AsyncJob;
 use crate::config::{PrimaryMouseDrag, TransitionValue};
 use crate::displayed_item_tree::{ItemIndex, VisibleItemIndex};
 use crate::graphics::{Graphic, GraphicId};
-use crate::hierarchy::ParameterDisplayLocation;
+use crate::hierarchy::{ParameterDisplayLocation, ScopeExpand};
 use crate::state::UserState;
 use crate::transaction_container::{
     StreamScopeRef, TransactionContainer, TransactionRef, TransactionStreamRef,
@@ -72,7 +72,10 @@ impl<T: Copy> Copy for MessageTarget<T> {}
 pub enum Message {
     /// Set active scope
     SetActiveScope(ScopeType),
-    ExpandScope(ScopeRef),
+    ExpandScope(ScopeExpand),
+    ExpandAllScopes,
+    CollapseAllScopes,
+    SetRootScopeActive,
     /// Add one or more variables to wave view.
     AddVariables(Vec<VariableRef>),
     /// Add scope to wave view. If second argument is true, add subscopes recursively.
