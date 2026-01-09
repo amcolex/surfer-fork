@@ -22,7 +22,7 @@ use crate::{
     displayed_item::{DisplayedFieldRef, DisplayedItemRef},
     displayed_item_tree::VisibleItemIndex,
     graphics::{Direction, GrPoint, Graphic, GraphicId},
-    hierarchy::{HierarchyStyle, ParameterDisplayLocation},
+    hierarchy::{HierarchyStyle, ParameterDisplayLocation, ScopeExpand},
     message::MessageTarget,
     setup_custom_font,
     state::UserState,
@@ -555,8 +555,20 @@ snapshot_ui_with_file_and_msgs! {top_level_signals_have_no_aliasing, "examples/p
 snapshot_ui_with_file_and_msgs! {expand_scope_works, "examples/counter.vcd", [
     Message::SetSidePanelVisible(true),
     Message::AddScope(ScopeRef::from_strs(&["tb"]), true),
-    Message::ExpandScope(ScopeRef::from_strs(&["tb", "dut"])),
+    Message::ExpandScope(ScopeExpand::ExpandSpecific(ScopeRef::from_strs(&["tb", "dut"]))),
 ]}
+
+snapshot_ui_with_file_and_msgs! {expand_all_scopes_works, "examples/counter.vcd", [
+    Message::SetSidePanelVisible(true),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), true),
+    Message::ExpandScope(ScopeExpand::ExpandAll),
+]}
+
+snapshot_ui_with_file_and_msgs! {collapse_all_scopes_works, "examples/counter.vcd", [
+Message::SetSidePanelVisible(true),
+Message::AddScope(ScopeRef::from_strs(&["tb"]), true),
+Message::ExpandScope(ScopeExpand::ExpandSpecific(ScopeRef::from_strs(&["tb", "dut"]))),
+Message::CollapseAllScopes,]}
 
 snapshot_ui! {resizing_the_canvas_redraws, || {
     let mut state = SystemState::new_default_config().unwrap().with_params(StartupParams {
