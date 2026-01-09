@@ -14,6 +14,7 @@ use derive_more::{Display, FromStr};
 use ecolor::Color32;
 use egui::text::LayoutJob;
 use egui::{CentralPanel, Frame, Layout, ScrollArea, TextStyle, TopBottomPanel, Ui};
+use egui_remixicon::icons;
 use emath::Align;
 use enum_iterator::Sequence;
 use epaint::{
@@ -41,6 +42,13 @@ pub enum ParameterDisplayLocation {
     None,
 }
 
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+pub enum ScopeExpand {
+    ExpandSpecific(ScopeRef),
+    ExpandAll,
+    CollapseAll,
+}
+
 impl SystemState {
     /// Scopes and variables in two separate lists
     pub fn separate(&mut self, ui: &mut Ui, msgs: &mut Vec<Message>) {
@@ -54,8 +62,24 @@ impl SystemState {
             .max_height(total_space - 64.0)
             .frame(Frame::new().inner_margin(Margin::same(5)))
             .show_inside(ui, |ui| {
-                ui.heading("Scopes")
-                    .context_menu(|ui| self.hierarchy_menu(msgs, ui));
+                ui.horizontal(|ui| {
+                    ui.heading("Scopes")
+                        .context_menu(|ui| self.hierarchy_menu(msgs, ui));
+                    if self.user.waves.is_some() {
+                        ui.button(icons::MENU_UNFOLD_FILL)
+                            .on_hover_text("Expand all scopes")
+                            .clicked()
+                            .then(|| msgs.push(Message::ExpandScope(ScopeExpand::ExpandAll)));
+                        ui.button(icons::MENU_FOLD_FILL)
+                            .on_hover_text("Collapse all scopes")
+                            .clicked()
+                            .then(|| msgs.push(Message::ExpandScope(ScopeExpand::CollapseAll)));
+                        ui.button(icons::SQUARE_ROOT)
+                            .on_hover_text("Select root scope")
+                            .clicked()
+                            .then(|| msgs.push(Message::SetRootScopeActive));
+                    }
+                });
                 ui.add_space(3.0);
 
                 ScrollArea::both()
@@ -81,6 +105,7 @@ impl SystemState {
 
                 self.draw_variables(msgs, ui);
             });
+        *self.scope_ref_to_expand.borrow_mut() = None;
     }
 
     fn draw_variables(&mut self, msgs: &mut Vec<Message>, ui: &mut Ui) {
@@ -403,15 +428,15 @@ impl SystemState {
                 self.add_scope_selectable_label(msgs, wave, scope, ui, false);
             });
         } else {
-            let should_open_header = self.should_open_header(scope);
+            let should_open_header = self.should_open_header_and_scroll_to(scope);
             let mut collapsing_header =
                 egui::collapsing_header::CollapsingState::load_with_default_open(
                     ui.ctx(),
                     egui::Id::new(scope),
                     false,
                 );
-            if should_open_header {
-                collapsing_header.set_open(true);
+            if let Some((header_state, _)) = should_open_header {
+                collapsing_header.set_open(header_state);
             }
             collapsing_header
                 .show_header(ui, |ui| {
@@ -423,7 +448,7 @@ impl SystemState {
                                 wave,
                                 scope,
                                 ui,
-                                should_open_header,
+                                should_open_header.is_some_and(|(_, scroll)| scroll),
                             );
                         },
                     );
@@ -680,17 +705,23 @@ impl SystemState {
         }
     }
 
-    fn should_open_header(&self, scope: &ScopeRef) -> bool {
+    fn should_open_header_and_scroll_to(&self, scope: &ScopeRef) -> Option<(bool, bool)> {
         let mut scope_ref_cell = self.scope_ref_to_expand.borrow_mut();
-        if let Some(state) = scope_ref_cell.as_mut()
-            && state.strs.starts_with(&scope.strs)
-        {
-            if (state.strs.len() - 1) == scope.strs.len() {
-                // need to compare vs. parent of signal
-                *scope_ref_cell = None;
+        if let Some(state) = scope_ref_cell.as_mut() {
+            match state {
+                ScopeExpand::ExpandAll => return Some((true, false)),
+                ScopeExpand::CollapseAll => return Some((false, false)),
+                ScopeExpand::ExpandSpecific(state) => {
+                    if state.strs.starts_with(&scope.strs) {
+                        if (state.strs.len() - 1) == scope.strs.len() {
+                            // need to compare vs. parent of signal
+                            *scope_ref_cell = None;
+                        }
+                        return Some((true, true));
+                    }
+                }
             }
-            return true;
         }
-        false
+        None
     }
 }
