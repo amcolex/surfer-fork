@@ -22,7 +22,7 @@ use crate::{
     displayed_item::{DisplayedFieldRef, DisplayedItemRef},
     displayed_item_tree::VisibleItemIndex,
     graphics::{Direction, GrPoint, Graphic, GraphicId},
-    hierarchy::{HierarchyStyle, ParameterDisplayLocation},
+    hierarchy::{HierarchyStyle, ParameterDisplayLocation, ScopeExpandType},
     message::MessageTarget,
     setup_custom_font,
     state::UserState,
@@ -555,7 +555,13 @@ snapshot_ui_with_file_and_msgs! {top_level_signals_have_no_aliasing, "examples/p
 snapshot_ui_with_file_and_msgs! {expand_scope_works, "examples/counter.vcd", [
     Message::SetSidePanelVisible(true),
     Message::AddScope(ScopeRef::from_strs(&["tb"]), true),
-    Message::ExpandScope(ScopeRef::from_strs(&["tb", "dut"])),
+    Message::ExpandScope(ScopeExpandType::ExpandSpecific(ScopeRef::from_strs(&["tb", "dut"]))),
+]}
+
+snapshot_ui_with_file_and_msgs! {expand_all_scopes_works, "examples/counter.vcd", [
+    Message::SetSidePanelVisible(true),
+    Message::AddScope(ScopeRef::from_strs(&["tb"]), true),
+    Message::ExpandScope(ScopeExpandType::ExpandAll),
 ]}
 
 snapshot_ui! {resizing_the_canvas_redraws, || {

@@ -305,6 +305,10 @@ impl SystemState {
             Message::ExpandScope(scope_ref) => {
                 *self.scope_ref_to_expand.borrow_mut() = Some(scope_ref);
             }
+            Message::SetRootScopeActive => {
+                let waves = self.user.waves.as_mut()?;
+                waves.active_scope = None;
+            }
             Message::AddVariables(vars) => {
                 if !vars.is_empty() {
                     let undo_msg = if vars.len() == 1 {
