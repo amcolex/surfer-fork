@@ -190,5 +190,4 @@ fn create_file_dialog(filter: (String, Vec<String>), title: &'static str) -> Asy
     AsyncFileDialog::new()
         .set_title(title)
         .add_filter(filter.0, &filter.1)
-        .add_filter("All files", &["*"])
 }
