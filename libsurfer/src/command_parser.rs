@@ -204,7 +204,7 @@ pub fn get_parser(state: &SystemState) -> Command<Message> {
     };
 
     fn parse_marker(query: &str, markers: &[(Option<String>, u8)]) -> Option<u8> {
-        if let Some(id_str) = query.strip_prefix("#") {
+        if let Some(id_str) = query.strip_prefix("#").or(query.strip_prefix("id:")) {
             let id = id_str.parse::<u8>().ok()?;
             Some(id)
         } else {

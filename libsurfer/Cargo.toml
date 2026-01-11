@@ -17,7 +17,7 @@ directories.workspace = true
 extism = { workspace = true, optional = true }
 extism-manifest = { workspace = true, optional = true }
 futures = { workspace = true, features = ["executor"] }
-tokio = { workspace = true, features = ["macros"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures.workspace = true
