@@ -287,19 +287,24 @@ impl SystemState {
         match message {
             Message::SetActiveScope(scope) => {
                 let waves = self.user.waves.as_mut()?;
-                let scope = if let ScopeType::StreamScope(StreamScopeRef::Empty(name)) = scope {
-                    ScopeType::StreamScope(StreamScopeRef::new_stream_from_name(
-                        waves.inner.as_transactions().unwrap(),
-                        name,
-                    ))
-                } else {
-                    scope
-                };
+                if let Some(scope) = scope {
+                    let scope = if let ScopeType::StreamScope(StreamScopeRef::Empty(name)) = scope {
+                        ScopeType::StreamScope(StreamScopeRef::new_stream_from_name(
+                            waves.inner.as_transactions().unwrap(),
+                            name,
+                        ))
+                    } else {
+                        scope
+                    };
 
-                if waves.inner.scope_exists(&scope) {
-                    waves.active_scope = Some(scope);
+                    if waves.inner.scope_exists(&scope) {
+                        waves.active_scope = Some(scope);
+                    } else {
+                        warn!("Setting active scope to {scope} which does not exist");
+                    }
                 } else {
-                    warn!("Setting active scope to {scope} which does not exist");
+                    // Set to top-level scope
+                    waves.active_scope = None;
                 }
             }
             Message::ExpandScope(scope_ref) => {
@@ -1639,7 +1644,7 @@ impl SystemState {
                             .focused_item
                             .and_then(|vidx| waves.items_tree.get_visible(vidx))
                             .map(|node| node.item_ref)
-                            .map(|item_ref| change_type(item_ref));
+                            .map(change_type);
                     }
                 }
 
