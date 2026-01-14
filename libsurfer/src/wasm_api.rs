@@ -20,6 +20,7 @@ use crate::WCP_CS_HANDLER;
 use crate::WCP_SC_HANDLER;
 use crate::WaveSource;
 use crate::channels::{GlobalChannelTx, IngressHandler};
+use crate::command_generator::generate_command_string;
 use crate::displayed_item::DisplayedItemRef;
 use crate::graphics::Anchor;
 use crate::graphics::Direction;
@@ -257,6 +258,13 @@ pub async fn index_of_name(name: String) -> Option<usize> {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
 pub async fn get_state() -> Option<String> {
     perform_query(Box::new(move |state| state.encode_state())).await
+}
+
+/// Returns a command string that would reconstruct the basic user stat (e.g.,
+/// primarily variables and markers and markers).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
+pub async fn get_simplified_command_string() -> Option<String> {
+    perform_query(Box::new(move |state| Some(generate_command_string(&state.user)))).await
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen)]
