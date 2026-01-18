@@ -73,10 +73,17 @@ pub struct SumpState {
     pub url_input: String,
     /// Trigger bits input buffer (hex string)
     pub trigger_bits_input: String,
+    /// Embedded mode: served from sump-server, auto-connect to same origin
+    pub embedded_mode: bool,
+    /// Has auto-connect been attempted (only try once)
+    pub auto_connect_attempted: bool,
 }
 
 impl Default for SumpState {
     fn default() -> Self {
+        // Detect embedded mode: if served from sump-server (port 8082), auto-connect
+        let (embedded_mode, url_input) = detect_embedded_mode();
+        
         Self {
             server_url: String::new(),
             connection: ConnectionState::Disconnected,
@@ -91,10 +98,28 @@ impl Default for SumpState {
             auto_reload: true,  // Always auto-load waveforms
             polling_active: false,
             panel_visible: true,
-            url_input: String::new(),
+            url_input,
             trigger_bits_input: "00000001".to_string(),
+            embedded_mode,
+            auto_connect_attempted: false,
         }
     }
+}
+
+/// Detect if we're running in embedded mode (served from sump-server)
+fn detect_embedded_mode() -> (bool, String) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if let Some(window) = web_sys::window() {
+            if let Ok(origin) = window.location().origin() {
+                // If served from sump-server (port 8082), we're in embedded mode
+                if origin.contains(":8082") {
+                    return (true, origin);
+                }
+            }
+        }
+    }
+    (false, String::new())
 }
 
 impl SumpState {

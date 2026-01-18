@@ -148,6 +148,24 @@ fn draw_connection_section(ui: &mut Ui, sump: &mut SumpState, msgs: &mut Vec<Mes
     let is_connected = sump.is_connected();
     let is_connecting = matches!(sump.connection, ConnectionState::Connecting);
 
+    // In embedded mode, auto-connect on first draw
+    if sump.embedded_mode && !sump.auto_connect_attempted && !is_connected && !is_connecting {
+        sump.auto_connect_attempted = true;
+        if !sump.url_input.is_empty() {
+            msgs.push(Message::SumpConnect(sump.url_input.clone()));
+        }
+    }
+
+    // In embedded mode when connected, don't show connection UI at all
+    if sump.embedded_mode && is_connected {
+        // Just show a small connected indicator
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("●").color(Color32::GREEN).size(12.0));
+            ui.label(RichText::new("Connected").size(11.0).color(Color32::GRAY));
+        });
+        return;
+    }
+
     if let ConnectionState::Error(err) = &sump.connection {
         ui.label(RichText::new(err).color(Color32::RED).size(12.0));
         ui.add_space(4.0);
@@ -168,6 +186,15 @@ fn draw_connection_section(ui: &mut Ui, sump: &mut SumpState, msgs: &mut Vec<Mes
             });
         });
     } else {
+        // In embedded mode, show a connecting spinner
+        if sump.embedded_mode && is_connecting {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new("Connecting...").size(11.0));
+            });
+            return;
+        }
+
         ui.horizontal(|ui| {
             let response = TextEdit::singleline(&mut sump.url_input)
                 .hint_text("http://192.168.2.1:8082")
