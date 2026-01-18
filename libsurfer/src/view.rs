@@ -492,6 +492,9 @@ impl SystemState {
                     }
                 }
 
+                // SUMP ILA panel
+                crate::sump::draw_sump_panel(ctx, &mut self.user.sump_state, &mut msgs);
+
                 CentralPanel::default()
                     .frame(Frame {
                         inner_margin: Margin::ZERO,
@@ -514,6 +517,9 @@ impl SystemState {
                 .as_ref()
                 .is_some_and(|waves| !waves.any_displayed())
         {
+            // SUMP ILA panel (also show when no waves loaded)
+            crate::sump::draw_sump_panel(ctx, &mut self.user.sump_state, &mut msgs);
+
             CentralPanel::default()
                 .frame(Frame::NONE.fill(self.user.config.theme.canvas_colors.background))
                 .show(ctx, |ui| {

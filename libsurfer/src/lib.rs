@@ -64,6 +64,7 @@ pub mod wave_data;
 pub mod wave_source;
 pub mod wcp;
 pub mod wellen;
+pub mod sump;
 
 use crate::config::AutoLoad;
 use crate::displayed_item_tree::ItemIndex;
@@ -2294,6 +2295,133 @@ impl SystemState {
                 self.items_to_expand.borrow_mut().push((item, levels));
             }
             Message::AddCharToPrompt(c) => *self.char_to_add_to_prompt.borrow_mut() = Some(c),
+
+            // SUMP ILA messages
+            Message::SumpConnect(url) => {
+                self.user.sump_state.connection = sump::ConnectionState::Connecting;
+                self.user.sump_state.server_url = url.clone();
+                self.user.sump_state.url_input = url.clone();
+                sump::fetch_ila_info(url, self.channels.msg_sender.clone());
+            }
+            Message::SumpDisconnect => {
+                self.user.sump_state.connection = sump::ConnectionState::Disconnected;
+                self.user.sump_state.ila_info = None;
+                self.user.sump_state.capture_status = None;
+            }
+            Message::SumpInfoReceived(url, info) => {
+                info!("SUMP: Connected to {} - {} hubs", url, info.hub_count);
+                self.user.sump_state.connection = sump::ConnectionState::Connected;
+                // Set sample count to max for first available pod
+                if let Some(hub) = info.hubs.first() {
+                    if let Some(pod) = hub.pods.first() {
+                        self.user.sump_state.sample_count = pod.ram_depth;
+                    }
+                }
+                self.user.sump_state.ila_info = Some(info);
+                // Fetch initial status
+                sump::fetch_capture_status(url, self.channels.msg_sender.clone());
+            }
+            Message::SumpConnectionError(err) => {
+                self.user.sump_state.connection = sump::ConnectionState::Error(err);
+            }
+            Message::SumpStatusReceived(status) => {
+                self.user.sump_state.capture_status = Some(status);
+            }
+            Message::SumpCapture(hub, pod, count) => {
+                if !self.user.sump_state.server_url.is_empty() {
+                    // Use the combined configure-arm-capture function
+                    sump::configure_arm_and_capture(
+                        self.user.sump_state.server_url.clone(),
+                        self.user.sump_state.trigger_config.clone(),
+                        hub,
+                        pod,
+                        count,
+                        self.channels.msg_sender.clone(),
+                    );
+                }
+            }
+            Message::SumpCaptureReceived(data) => {
+                info!("SUMP: Capture received with {} samples from hub {} pod {}",
+                      data.samples.len(), data.hub, data.pod);
+
+                // Check if this is a recapture of the same source
+                let current_source = (data.hub, data.pod);
+                let is_same_source = self.user.sump_state.last_capture_source == Some(current_source);
+
+                self.user.sump_state.capture_data = Some(data.clone());
+                self.user.sump_state.last_capture_source = Some(current_source);
+
+                // Refresh status
+                if !self.user.sump_state.server_url.is_empty() {
+                    sump::fetch_capture_status(
+                        self.user.sump_state.server_url.clone(),
+                        self.channels.msg_sender.clone(),
+                    );
+                }
+
+                // Auto-load waveform if enabled
+                if self.user.sump_state.auto_reload {
+                    let hub_info = self.user.sump_state.selected_hub_info().cloned();
+                    let pod_info = self.user.sump_state.selected_pod_info().cloned();
+                    let vcd_data = sump::generate_vcd(
+                        &data,
+                        hub_info.as_ref(),
+                        pod_info.as_ref(),
+                    );
+                    info!("SUMP: Generated VCD with {} bytes", vcd_data.len());
+
+                    // Use KeepAll for recaptures to preserve the view, Clear for new
+                    let load_options = if is_same_source {
+                        LoadOptions::KeepAll
+                    } else {
+                        LoadOptions::Clear
+                    };
+
+                    self.update(Message::LoadFromData(vcd_data, load_options));
+                }
+            }
+            Message::SumpConfigureTrigger(config) => {
+                self.user.sump_state.trigger_config = config;
+            }
+            Message::SumpReset => {
+                if !self.user.sump_state.server_url.is_empty() {
+                    sump::send_reset(
+                        self.user.sump_state.server_url.clone(),
+                        self.channels.msg_sender.clone(),
+                    );
+                }
+            }
+            Message::SumpInit => {
+                if !self.user.sump_state.server_url.is_empty() {
+                    sump::send_init(
+                        self.user.sump_state.server_url.clone(),
+                        self.channels.msg_sender.clone(),
+                    );
+                }
+            }
+            Message::SumpCommandOk(msg) => {
+                info!("SUMP: {}", msg);
+                // Refresh status after command
+                if !self.user.sump_state.server_url.is_empty() {
+                    sump::fetch_capture_status(
+                        self.user.sump_state.server_url.clone(),
+                        self.channels.msg_sender.clone(),
+                    );
+                }
+            }
+            Message::SumpCommandError(err) => {
+                error!("SUMP: {}", err);
+            }
+            Message::SumpTogglePanel => {
+                self.user.sump_state.panel_visible = !self.user.sump_state.panel_visible;
+            }
+            Message::SumpSetHub(hub) => {
+                self.user.sump_state.selected_hub = hub;
+                self.user.sump_state.selected_pod = 0;
+            }
+            Message::SumpSetPod(pod) => {
+                self.user.sump_state.selected_pod = pod;
+            }
         }
         Some(())
     }

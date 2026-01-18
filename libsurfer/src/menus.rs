@@ -286,6 +286,7 @@ impl SystemState {
                 Message::SetOverviewVisible(!self.show_overview()),
             )
             .add_closing_menu(msgs, ui);
+            b("Toggle SUMP panel", Message::SumpTogglePanel).add_closing_menu(msgs, ui);
             b(
                 "Toggle statusbar",
                 Message::SetStatusbarVisible(!self.show_statusbar()),

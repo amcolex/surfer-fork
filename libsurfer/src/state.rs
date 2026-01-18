@@ -132,6 +132,10 @@ pub struct UserState {
     // - Sequencing issue in serialization, due to us having to run that async
     #[serde(skip)]
     pub state_file: Option<PathBuf>,
+
+    /// SUMP ILA state
+    #[serde(skip, default)]
+    pub sump_state: crate::sump::SumpState,
 }
 
 // Impl needed since for loading we need to put State into a Message
@@ -214,6 +218,7 @@ impl Default for UserState {
             surver_file_infos: None,
             surver_url: None,
             transition_value: None,
+            sump_state: crate::sump::SumpState::default(),
         }
     }
 }

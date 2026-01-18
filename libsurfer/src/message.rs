@@ -435,4 +435,40 @@ pub enum Message {
     /// Should only used for tests. Expands the parameter section so that one can test the rendering.
     ExpandParameterSection,
     AsyncDone(AsyncJob),
+
+    // SUMP ILA messages
+    /// Connect to SUMP server
+    SumpConnect(String),
+    /// Disconnect from SUMP server
+    SumpDisconnect,
+    /// ILA info received from server
+    #[serde(skip)]
+    SumpInfoReceived(String, crate::sump::IlaInfo),
+    /// Connection error
+    SumpConnectionError(String),
+    /// Capture status received
+    #[serde(skip)]
+    SumpCaptureReceived(crate::sump::CaptureData),
+    /// Capture status update
+    #[serde(skip)]
+    SumpStatusReceived(crate::sump::CaptureStatus),
+    /// Start capture
+    SumpCapture(u8, u8, u32),
+    /// Configure trigger and arm
+    #[serde(skip)]
+    SumpConfigureTrigger(crate::sump::TriggerConfig),
+    /// Send reset command
+    SumpReset,
+    /// Send init command
+    SumpInit,
+    /// Command completed successfully
+    SumpCommandOk(String),
+    /// Command failed
+    SumpCommandError(String),
+    /// Toggle SUMP panel visibility
+    SumpTogglePanel,
+    /// Set selected hub
+    SumpSetHub(u8),
+    /// Set selected pod
+    SumpSetPod(u8),
 }
